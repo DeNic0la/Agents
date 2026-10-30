@@ -1,0 +1,2 @@
+disable-model-invocation: true
+argument-hint: "A loose idea to chart, or a map (URL or number) to work through"

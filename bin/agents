@@ -1,0 +1,554 @@
+#!/usr/bin/env bash
+# agents - copy items from this preset into a project for Claude Code, Codex and
+# GitHub Copilot, and keep everything up to date.
+# Runs on Linux, WSL and Git Bash (the installers put a shim on PATH).
+set -euo pipefail
+shopt -s nullglob
+
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+AGENTS_DIR="$(cd "$(dirname "$SELF")/.." && pwd)"
+SRC="$AGENTS_DIR/preset"
+KINDS="concepts references skills agents commands hooks"
+START_MARK="<!-- agents-preset:start -->"
+END_MARK="<!-- agents-preset:end -->"
+# shellcheck source=../lib/common.sh
+. "$AGENTS_DIR/lib/common.sh"
+
+usage() {
+  cat <<'EOF'
+usage: agents <command> [args]
+
+In a project (copies files into the project, meant to be committed):
+  setup [item...]    pick which items this project uses (interactive without args)
+  add <item>...      add items
+  remove <item>...   remove items and their copied files
+  list               show available items (* = used in this project)
+  sync               re-apply this project's items without pulling (e.g. after a repo skill was generated)
+
+Skills you add get a repo version: generated from the skill's recipe, tailored to the project,
+and preferred over the global version. Skills you don't add stay global.
+
+Anywhere:
+  update             pull the preset repo, refresh your home and the current project
+  install            re-install the preset into your home
+  check              validate the preset's skills against the Agent Skills spec
+
+Items are named like concepts/progressive-disclosure or skills/my-skill (".md" is optional).
+
+Runtime controls (allowed-tools, disallowed-tools, context, ...) are opt-in: put them in
+.agents/overrides/<tool>/<skill>.yaml (project) or ~/.agents/overrides/<tool>/<skill>.yaml
+(this machine). Tools: claude (merged into SKILL.md), codex (used as agents/openai.yaml).
+EOF
+}
+
+die() { echo "agents: $*" >&2; exit 1; }
+
+is_windows() { case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) return 0 ;; esac; return 1; }
+
+in_list() {
+  local x="$1" y; shift
+  for y in "$@"; do [ "$x" = "$y" ] && return 0; done
+  return 1
+}
+
+ROOT="$(cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" && pwd)"
+MANIFEST="$ROOT/.agents/preset.txt"
+PROJECT_OVERRIDES="$ROOT/.agents/overrides"   # user-owned runtime controls, never touched
+
+# Agent Skills spec fields allowed in a shared SKILL.md (https://agentskills.io/specification).
+# allowed-tools is in the spec, but as a runtime control it's opt-in via overrides.
+SKILL_FIELDS="name description license compatibility metadata"
+RUNTIME_CONTROLS="allowed-tools disallowed-tools context agent model effort"
+
+require_project() {
+  [ "$ROOT" != "$AGENTS_DIR" ] || die "run this inside a project, not the preset repo"
+}
+
+available() {
+  local kind entry
+  for kind in $KINDS; do
+    for entry in "$SRC/$kind"/*; do
+      [ "$(basename "$entry")" = "INDEX.md" ] || echo "$kind/$(basename "$entry")"
+    done
+  done
+}
+
+selected() {
+  [ -f "$MANIFEST" ] || return 0
+  sed -e 's/\r$//' -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' "$MANIFEST"
+}
+
+# Items preset/defaults.txt adds to a project that isn't set up yet.
+defaults() {
+  [ -f "$SRC/defaults.txt" ] || return 0
+  sed -e 's/\r$//' -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' "$SRC/defaults.txt" | while IFS= read -r item; do
+    if [ -e "$SRC/$item" ]; then echo "$item"; fi
+  done
+}
+
+# Starting selection: the project's items, or the defaults on first setup.
+initial() {
+  if [ -f "$MANIFEST" ]; then selected; else defaults; fi
+}
+
+resolve() {
+  local want="${1%/}"
+  case "$want" in
+    */*/*|*..*|/*) die "invalid item: $1" ;;
+    */*) in_list "${want%%/*}" $KINDS || die "unknown kind in $1 (one of: $KINDS)" ;;
+    *) die "invalid item: $1 (expected <kind>/<name>, see: agents list)" ;;
+  esac
+  if [ -e "$SRC/$want" ]; then echo "$want"
+  elif [ -e "$SRC/$want.md" ]; then echo "$want.md"
+  else die "unknown item: $1 (see: agents list)"
+  fi
+}
+
+# Where an item goes in a project, one "mode<TAB>path" line per tool target.
+targets() {
+  local item="$1" n
+  case "$item" in
+    concepts/*|references/*|hooks/*)
+      printf 'copy\t.agents/%s\n' "$item" ;;
+    skills/*)
+      # Repo version: the recipe, plus a Claude Code mirror of the generated
+      # .agents/skills/<n>/ (which Codex and Copilot read directly).
+      n="$(basename "$item")"
+      printf 'recipe\t.agents/recipes/skills/%s.md\n' "$n"
+      printf 'mirror\t.claude/skills/%s\n' "$n" ;;
+    agents/*)
+      n="$(basename "$item" .md)"
+      printf 'copy\t.claude/agents/%s.md\n' "$n"
+      printf 'copy\t.github/agents/%s.agent.md\n' "$n"
+      printf 'codex-agent\t.codex/agents/%s.toml\n' "$n" ;;
+    commands/*)
+      printf 'copy\t.claude/%s\n' "$item" ;;
+  esac
+}
+
+# What a target is produced from.
+item_source() {
+  case "$1" in
+    recipe) echo "$SRC/$2/GENERATE.md" ;;
+    mirror) echo "$ROOT/.agents/skills/$(basename "$2")" ;;
+    *)      echo "$SRC/$2" ;;
+  esac
+}
+
+# True if the target at $3 already has the content the item would produce.
+up_to_date() {
+  local mode="$1" src="$2" dst="$3"
+  # A mirror of a repo skill that isn't generated yet should simply not exist.
+  if [ "$mode" = "mirror" ] && [ ! -d "$src" ]; then [ ! -e "$dst" ]; return; fi
+  [ -e "$dst" ] || return 1
+  case "$mode" in
+    copy|recipe) diff -rq "$src" "$dst" >/dev/null 2>&1 ;;
+    codex-agent) codex_agent "$src" 2>/dev/null | cmp -s - "$dst" ;;
+    mirror)
+      local tmp rc=0
+      tmp="$(mktemp -d)"
+      build_skill claude "$src" "$tmp/s" "$PROJECT_OVERRIDES"
+      diff -rq "$tmp/s" "$dst" >/dev/null 2>&1 || rc=1
+      rm -rf "$tmp"
+      return $rc ;;
+  esac
+}
+
+# Removes a path and any parent folders it leaves empty (up to the project root).
+remove_path() {
+  local dir
+  rm -rf "${ROOT:?}/$1"
+  dir="$(dirname "$1")"
+  while [ "$dir" != "." ] && rmdir "$ROOT/$dir" 2>/dev/null; do dir="$(dirname "$dir")"; done
+}
+
+copy_item() {
+  local item="$1" src mode path changed=""
+  if [ ! -e "$SRC/$item" ]; then echo "missing $item (gone from the preset, local copies kept)"; return; fi
+  while IFS=$'\t' read -r mode path; do
+    src="$(item_source "$mode" "$item")"
+    up_to_date "$mode" "$src" "$ROOT/$path" && continue
+    mkdir -p "$(dirname "$ROOT/$path")"
+    rm -rf "${ROOT:?}/$path"
+    case "$mode" in
+      copy|recipe) cp -R "$src" "$ROOT/$path" ;;
+      mirror) [ -d "$src" ] && build_skill claude "$src" "$ROOT/$path" "$PROJECT_OVERRIDES" ;;
+      codex-agent)
+        if ! codex_agent "$src" > "$ROOT/$path"; then
+          rm -f "$ROOT/$path"
+          echo "warning: $item body contains ''' - skipped $path" >&2
+        fi ;;
+    esac
+    changed=1
+  done < <(targets "$item")
+  if [ -n "$changed" ]; then echo "copied  $item"; else echo "ok      $item"; fi
+}
+
+# True if a not-yet-managed item would overwrite something that's already in the project.
+conflicts() {
+  local item="$1" mode path
+  while IFS=$'\t' read -r mode path; do
+    if [ -e "$ROOT/$path" ] && ! up_to_date "$mode" "$(item_source "$mode" "$item")" "$ROOT/$path"; then
+      echo "$path"; return 0
+    fi
+  done < <(targets "$item")
+  return 1
+}
+
+# One-line summary of a markdown file: its frontmatter description, else its first heading.
+summary() {
+  [ -f "$1" ] || return 0
+  local s
+  s="$(frontmatter "$1" description)"
+  [ -n "$s" ] || s="$(sed -n '/^# /{s/^# *//;s/\r$//;p;q;}' "$1")"
+  echo "$s"
+}
+
+# Replaces the managed block in a file with $2 (removes it if $2 is empty).
+# Content outside the block is never touched; a file left empty is deleted.
+set_block() {
+  local file="$1" content="$2" tmp
+  tmp="$(mktemp)"
+  if [ -f "$file" ]; then
+    # Drop the old block and any trailing blank lines.
+    awk -v s="$START_MARK" -v e="$END_MARK" '
+      { l = $0; sub(/\r$/, "", l) }
+      l == s { skip = 1; next }
+      l == e { skip = 0; next }
+      skip { next }
+      l ~ /^[[:space:]]*$/ { blank++; next }
+      { while (blank > 0) { print ""; blank-- } print }
+    ' "$file" > "$tmp"
+  fi
+  if [ -n "$content" ]; then
+    {
+      [ -s "$tmp" ] && echo
+      echo "$START_MARK"
+      printf '%s\n' "$content"
+      echo "$END_MARK"
+    } >> "$tmp"
+  fi
+
+  if [ -s "$tmp" ]; then
+    if [ ! -f "$file" ] || ! cmp -s "$tmp" "$file"; then
+      cp "$tmp" "$file"
+      echo "updated ${file#"$ROOT"/}"
+    fi
+  elif [ -f "$file" ]; then
+    rm "$file"
+    echo "removed ${file#"$ROOT"/} (was empty)"
+  fi
+  rm -f "$tmp"
+}
+
+# Lists the copied concepts/references in AGENTS.md (read by Codex and Copilot)
+# and makes CLAUDE.md import it for Claude Code. Skills, agents and commands are
+# discovered by each tool on its own.
+update_instructions() {
+  local item path desc n concepts="" references="" skills="" block="" claude import
+  for item in "$@"; do
+    case "$item" in
+      skills/*)
+        n="$(basename "$item")"
+        skills+="- \`$n\`: \`.agents/skills/$n/\` (recipe: \`.agents/recipes/skills/$n.md\`)"$'\n'
+        continue ;;
+    esac
+    path=".agents/$item"
+    if [ -f "$ROOT/$path/CONCEPT.md" ]; then path="$path/CONCEPT.md"
+    elif [ -f "$ROOT/$path/INDEX.md" ]; then path="$path/INDEX.md"
+    fi
+    desc="$(summary "$ROOT/$path")"
+    case "$item" in
+      concepts/*)   concepts+="- \`$path\`${desc:+ — $desc}"$'\n' ;;
+      references/*) references+="- \`$path\`${desc:+ — $desc}"$'\n' ;;
+    esac
+  done
+  if [ -n "$concepts" ]; then
+    block+=$'\n'"**Concepts** are rules for AI agents in this project: how agent instructions (AGENTS.md, CLAUDE.md, skills, subagents, commands, hooks) are written, and how agents work. Each description says when it applies; follow it then, and open the concept for the details:"$'\n\n'"$concepts"
+  fi
+  if [ -n "$skills" ]; then
+    block+=$'\n'"**Repo-tailored skills**: these skills have a version tailored to this repository, and it always takes precedence over a global skill with the same name. If a repo version doesn't exist yet, generate it from its recipe the first time the skill applies, then run \`agents sync\`:"$'\n\n'"$skills"
+  fi
+  if [ -n "$references" ]; then
+    block+=$'\n'"**References**: follow each one's description; read the file when it applies:"$'\n\n'"$references"
+  fi
+  [ -z "$block" ] || block="## Preset knowledge"$'\n\n'"Managed by \`agents\` - edits inside this block are overwritten."$'\n'"${block%$'\n'}"
+  set_block "$ROOT/AGENTS.md" "$block"
+
+  if [ -f "$ROOT/.claude/CLAUDE.md" ] && [ ! -f "$ROOT/CLAUDE.md" ]; then
+    claude="$ROOT/.claude/CLAUDE.md"; import="@../AGENTS.md"
+  else
+    claude="$ROOT/CLAUDE.md"; import="@AGENTS.md"
+  fi
+  # Skip if CLAUDE.md already imports AGENTS.md on its own.
+  if [ -f "$claude" ] && awk -v s="$START_MARK" -v e="$END_MARK" '
+      { sub(/\r$/, "") } $0 == s { skip = 1 } !skip && /^@(\.\.\/)?AGENTS\.md/ { found = 1 } $0 == e { skip = 0 }
+      END { exit !found }' "$claude"; then
+    import=""
+  fi
+  [ -n "$block" ] || import=""
+  set_block "$claude" "$import"
+}
+
+# Makes the project match the given list of items.
+apply() {
+  local -a old=() keep=() hooks=() pending=()
+  local item mode path conflict
+  while IFS= read -r item; do old+=("$item"); done < <(selected)
+
+  for item in ${old[@]+"${old[@]}"}; do
+    in_list "$item" "$@" && continue
+    while IFS=$'\t' read -r mode path; do remove_path "$path"; done < <(targets "$item")
+    echo "removed $item"
+    case "$item" in
+      skills/*)
+        [ ! -d "$ROOT/.agents/skills/${item#skills/}" ] \
+          || echo "        kept .agents/skills/${item#skills/}/ (generated, owned by the project) - delete it to fall back to the global version" ;;
+    esac
+  done
+
+  for item in "$@"; do
+    in_list "$item" ${keep[@]+"${keep[@]}"} && continue
+    if ! in_list "$item" ${old[@]+"${old[@]}"} && conflict="$(conflicts "$item")"; then
+      echo "skipped $item ($conflict already exists and is not managed by agents)"
+      continue
+    fi
+    copy_item "$item"
+    keep+=("$item")
+    case "$item" in
+      hooks/*) hooks+=("$item") ;;
+      skills/*) [ -f "$ROOT/.agents/skills/${item#skills/}/SKILL.md" ] || pending+=("${item#skills/}") ;;
+    esac
+  done
+
+  if [ ${#keep[@]} -gt 0 ]; then
+    mkdir -p "$(dirname "$MANIFEST")"
+    {
+      echo "# Preset items used by this project. Managed by 'agents' (setup/add/remove/update)."
+      printf '%s\n' "${keep[@]}" | sort -u
+    } > "$MANIFEST"
+  elif [ -f "$MANIFEST" ]; then
+    remove_path "${MANIFEST#"$ROOT"/}"
+  fi
+  # Same order as the manifest, so the managed blocks don't churn.
+  local -a sorted=()
+  while IFS= read -r item; do [ -n "$item" ] && sorted+=("$item"); done < <(printf '%s\n' ${keep[@]+"${keep[@]}"} | sort -u)
+  update_instructions ${sorted[@]+"${sorted[@]}"}
+
+  # The findings inbox belongs to the project: created once, never overwritten or removed.
+  if in_list concepts/findings ${keep[@]+"${keep[@]}"} && [ ! -f "$ROOT/.findings/generic.md" ]; then
+    mkdir -p "$ROOT/.findings"
+    cat > "$ROOT/.findings/generic.md" <<'EOF'
+# Findings
+
+Things noticed while working on something else. Agents append entries here and move on; they read this folder only when asked. See the findings concept for the entry format.
+EOF
+    echo "created .findings/generic.md"
+  fi
+
+  if [ ${#pending[@]} -gt 0 ]; then
+    echo
+    echo "Repo versions not generated yet (the global version is used until then): ${pending[*]}"
+    echo "Your agent generates each one the first time it's needed, or ask it now: \"generate the repo versions of our skills\"."
+  fi
+
+  if [ ${#hooks[@]} -gt 0 ]; then
+    echo
+    echo "Hooks are copied to .agents/hooks but not registered. Register them per tool:"
+    echo "  Claude Code: .claude/settings.json   Codex: .codex/hooks.json   Copilot: .github/hooks/*.json"
+  fi
+}
+
+# Interactive picker; leaves the result in PICKED.
+pick() {
+  local -a all=() cur=()
+  local item i mark answer tok n a b
+  while IFS= read -r item; do all+=("$item"); done < <(available)
+  while IFS= read -r item; do cur+=("$item"); done < <(initial)
+  [ ${#all[@]} -gt 0 ] || die "the preset has no items yet - add some under $SRC"
+  [ -f "$MANIFEST" ] || [ ${#cur[@]} -eq 0 ] || echo "New project: the * items are the preset's defaults."
+  echo "Selected skills get a version tailored to this repo (preferred over the global one); unselected skills stay global."
+  [ -t 0 ] || die "no items given and no terminal to ask - use: agents setup <item>..."
+
+  i=1
+  for item in "${all[@]}"; do
+    mark=" "; in_list "$item" ${cur[@]+"${cur[@]}"} && mark="*"
+    printf '%3d %s %s\n' "$i" "$mark" "$item"
+    i=$((i + 1))
+  done
+  read -r -p "Select items (e.g. 1 3-5, all, none; Enter keeps the * ones): " answer
+  answer="${answer//$'\r'/}"
+
+  PICKED=()
+  if [ -z "$answer" ]; then PICKED=(${cur[@]+"${cur[@]}"}); return; fi
+  for tok in ${answer//,/ }; do
+    case "$tok" in
+      all)  PICKED=("${all[@]}") ;;
+      none) PICKED=() ;;
+      *[!0-9-]*|-*|*-) die "invalid selection: $tok" ;;
+      *-*)
+        a="${tok%-*}"; b="${tok#*-}"
+        for ((n = a; n <= b; n++)); do
+          [ "$n" -ge 1 ] && [ "$n" -le ${#all[@]} ] || die "out of range: $n"
+          PICKED+=("${all[n - 1]}")
+        done ;;
+      *)
+        [ "$tok" -ge 1 ] && [ "$tok" -le ${#all[@]} ] || die "out of range: $tok"
+        PICKED+=("${all[tok - 1]}") ;;
+    esac
+  done
+}
+
+# Top-level keys of a YAML file or a Markdown file's frontmatter.
+top_keys() {
+  awk '
+    { sub(/\r$/, "") }
+    FNR == 1 && $0 == "---" { fm = 1; next }
+    fm && $0 == "---" { exit }
+    /^[A-Za-z0-9_-]+:/ { k = $0; sub(/:.*/, "", k); print k }
+  ' "$1"
+}
+
+# Validates the preset against the skill rules (concepts/portable-skills).
+cmd_check() {
+  local errors=0 dir n name desc compat key f
+  err() { echo "error: $*"; errors=$((errors + 1)); }
+  for dir in "$SRC"/skills/*/; do
+    dir="${dir%/}"; n="$(basename "$dir")"
+    f="$dir/SKILL.md"
+    if [ ! -f "$f" ]; then err "skills/$n: missing SKILL.md"; continue; fi
+    name="$(frontmatter "$f" name)"; desc="$(frontmatter "$f" description)"; compat="$(frontmatter "$f" compatibility)"
+    [ "$name" = "$n" ] || err "skills/$n: name '$name' must match the folder name"
+    [[ "$name" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] && [ ${#name} -le 64 ] \
+      || err "skills/$n: name must be 1-64 lowercase letters, digits and single hyphens"
+    [ -n "$desc" ] && [ ${#desc} -le 1024 ] || err "skills/$n: description must be 1-1024 characters"
+    [ ${#compat} -le 500 ] || err "skills/$n: compatibility must be at most 500 characters"
+    grep -qF ".agents/skills/$n/SKILL.md" "$f" \
+      || err "skills/$n: SKILL.md must tell agents to prefer the repo version at .agents/skills/$n/SKILL.md"
+    if [ ! -f "$dir/GENERATE.md" ]; then
+      err "skills/$n: missing GENERATE.md (the recipe for a repo-tailored version)"
+    elif [ -z "$(frontmatter "$dir/GENERATE.md" description)" ]; then
+      err "skills/$n: GENERATE.md needs a description in its frontmatter"
+    fi
+    while IFS= read -r key; do
+      if in_list "$key" $RUNTIME_CONTROLS; then
+        err "skills/$n: '$key' is a runtime control - users opt in via .agents/overrides/<tool>/$n.yaml"
+      elif ! in_list "$key" $SKILL_FIELDS; then
+        err "skills/$n: '$key' is not an Agent Skills field - move it to metadata or agents/<tool>.yaml"
+      fi
+    done < <(top_keys "$f")
+    for f in "$dir"/agents/*.yaml; do
+      while IFS= read -r key; do
+        in_list "$key" $RUNTIME_CONTROLS && err "skills/$n/agents/$(basename "$f"): '$key' is a runtime control - adapters must not set it"
+      done < <(top_keys "$f")
+    done
+    # User-invoked must be declared for both tools that support it, or neither.
+    local claude_user=0 codex_user=0
+    grep -qE '^disable-model-invocation:[[:space:]]*true' "$dir/agents/claude.yaml" 2>/dev/null && claude_user=1
+    grep -qE '^[[:space:]]+allow_implicit_invocation:[[:space:]]*false' "$dir/agents/openai.yaml" 2>/dev/null && codex_user=1
+    [ "$claude_user" = "$codex_user" ] \
+      || err "skills/$n: user-invoked in only one adapter - set disable-model-invocation in agents/claude.yaml and allow_implicit_invocation in agents/openai.yaml together"
+  done
+  for f in "$SRC"/commands/*.md; do
+    while IFS= read -r key; do
+      in_list "$key" $RUNTIME_CONTROLS && err "commands/$(basename "$f"): '$key' is a runtime control - keep it out of the shared command"
+    done < <(top_keys "$f")
+  done
+  if [ "$errors" -gt 0 ]; then echo "$errors problem(s) found"; return 1; fi
+  echo "ok - preset follows the skill rules"
+}
+
+global_install() {
+  if is_windows; then
+    local ps="powershell.exe"
+    command -v pwsh.exe >/dev/null 2>&1 && ps="pwsh.exe"
+    # An inherited PowerShell 7 module path breaks cmdlet loading in Windows PowerShell.
+    env -u PSModulePath "$ps" -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$AGENTS_DIR/install.ps1")"
+  else
+    bash "$AGENTS_DIR/install.sh"
+  fi
+}
+
+cmd_setup() {
+  require_project
+  if [ $# -gt 0 ]; then cmd_add "$@"; return; fi
+  pick
+  apply ${PICKED[@]+"${PICKED[@]}"}
+}
+
+cmd_add() {
+  require_project
+  [ $# -gt 0 ] || die "usage: agents add <item>..."
+  local -a items=()
+  local arg item
+  while IFS= read -r item; do
+    [ -f "$MANIFEST" ] || echo "default $item (new project; remove it with: agents remove $item)"
+    items+=("$item")
+  done < <(initial)
+  for arg in "$@"; do item="$(resolve "$arg")"; items+=("$item"); done
+  apply "${items[@]}"
+}
+
+cmd_remove() {
+  require_project
+  [ $# -gt 0 ] || die "usage: agents remove <item>..."
+  local -a drop=() items=()
+  local arg item
+  for arg in "$@"; do drop+=("${arg%/}" "${arg%/}.md"); done
+  while IFS= read -r item; do
+    in_list "$item" "${drop[@]}" || items+=("$item")
+  done < <(selected)
+  apply ${items[@]+"${items[@]}"}
+}
+
+cmd_sync() {
+  require_project
+  [ -f "$MANIFEST" ] || die "this project isn't set up yet - run: agents setup"
+  local -a items=()
+  local item
+  while IFS= read -r item; do items+=("$item"); done < <(selected)
+  apply ${items[@]+"${items[@]}"}
+}
+
+cmd_list() {
+  local -a cur=()
+  local item mark
+  while IFS= read -r item; do cur+=("$item"); done < <(selected)
+  while IFS= read -r item; do
+    mark=" "; in_list "$item" ${cur[@]+"${cur[@]}"} && mark="*"
+    echo "$mark $item"
+  done < <(available)
+}
+
+cmd_update() {
+  if [ "${1:-}" != "--no-pull" ]; then
+    echo "Updating $AGENTS_DIR"
+    # --autostash keeps local edits (e.g. made through ~/.claude) across the pull.
+    git -C "$AGENTS_DIR" pull --rebase --autostash || die "git pull failed - resolve it in $AGENTS_DIR"
+    # Re-run from disk so a changed script takes effect.
+    exec bash "$AGENTS_DIR/bin/agents" update --no-pull
+  fi
+  global_install
+  if [ -f "$MANIFEST" ] && [ "$ROOT" != "$AGENTS_DIR" ]; then
+    echo "Refreshing $ROOT"
+    local -a items=()
+    local item
+    while IFS= read -r item; do items+=("$item"); done < <(selected)
+    apply ${items[@]+"${items[@]}"}
+  fi
+}
+
+cmd="${1:-}"
+[ $# -gt 0 ] && shift
+case "$cmd" in
+  setup)   cmd_setup "$@" ;;
+  add)     cmd_add "$@" ;;
+  remove)  cmd_remove "$@" ;;
+  list)    cmd_list ;;
+  sync)    cmd_sync ;;
+  update)  cmd_update "$@" ;;
+  install) global_install ;;
+  check)   cmd_check ;;
+  -h|--help|help|"") usage ;;
+  *) usage >&2; exit 1 ;;
+esac

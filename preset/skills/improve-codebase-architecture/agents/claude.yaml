@@ -1,0 +1,2 @@
+disable-model-invocation: true
+argument-hint: "What part of the codebase should I look at? (optional)"

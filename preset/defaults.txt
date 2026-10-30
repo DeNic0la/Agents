@@ -1,0 +1,6 @@
+# Items added automatically the first time `agents setup` or `agents add` runs in a project.
+# Existing projects aren't changed when this list changes; the user can remove any item afterwards.
+references/definition-of-done.md
+references/testing-patterns.md
+references/observability-checklist.md
+concepts/findings
