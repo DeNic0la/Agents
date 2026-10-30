@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Installs the preset for Claude Code, Codex and GitHub Copilot into your home.
-# Linux, macOS and WSL. On native Windows use install.ps1.
+# Linux and WSL. On native Windows use install.ps1.
 #
 #   ./install.sh              install (safe to re-run)
 #   ./install.sh --update     git pull, then install

@@ -83,4 +83,4 @@ Each stage: who runs it, the brief to send, what to capture from the reply, and 
 | Dependency accuracy | 0.15 | no false or missing dependencies; files, table and diagram agree; dependencies resolve to the same or an earlier phase |
 | Parallelization | 0.10 | independent steps marked parallel; diagram shows phase boundaries; peak width 1-5 |
 | Agent and tier selection | 0.08 | agents fit each step's output and come from the list; tiers follow the rules, `deep` earned |
-| Phase design | 0.15 | each phase ends in a working, verifiable state; reviewer tier never below the phase's highest implementation tier; sensible phase sizes; every criterion due at some phase; no thresholds in the file |
+| Phase design | 0.15 | each phase ends in a working, verifiable state; reviewer tier equals the phase's highest implementation tier; sensible phase sizes; every criterion due at some phase; no thresholds in the file |

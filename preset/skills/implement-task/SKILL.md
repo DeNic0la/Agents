@@ -39,7 +39,7 @@ Read first: `.agents/references/specs-workflow.md` (formats and markers), `model
    3. Decide on `combined_score` per `judged-iteration.md`, with `FLOOR` 3.0. A phase that doesn't build, lint or test green is never in the discretion band.
    4. **Pass:** mark its steps `[DONE]` and its heading `[REVIEWED]`, then hold any human checkpoint. **Fail:** follow [references/fixing.md](references/fixing.md), then re-review; after `MAX_ITERATIONS`, warn and continue.
    5. Never start a step of the next phase before this one is marked.
-4. **Definition of done.** Dispatch a `developer` at `deep` (or `--model`) to verify every `**Definition of Done:**` item ([brief](references/briefs.md#definition-of-done)). For each failing item, dispatch a fix and verify again, until all pass.
+4. **Definition of done.** Dispatch a `developer` at `standard` (or `--model`) to verify every `**Definition of Done:**` item ([brief](references/briefs.md#definition-of-done)). For each failing item, dispatch a fix and verify again, until all pass.
 5. **Finish.** Move the task file to `done/` and report (below).
 
 ## Human checkpoints

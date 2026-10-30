@@ -281,6 +281,19 @@ Run `agents check` before committing. It fails on:
 
 It also warns, without failing, when the uncommitted changes break a rule from this repo's `AGENTS.md`: `lib/common.sh` changed without `install.ps1` (or the reverse), or the installers or `bin/agents` changed without README.md and REQUIREMENTS.md.
 
+After changing the installers, `lib/common.sh` or `bin/agents`, run the smoke tests on every platform you can reach. They work on a copy of the repo with temporary home folders, so your own setup isn't touched:
+
+```bash
+bash tests/smoke.sh                                       # Linux / WSL
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tests\smoke.ps1  # Windows PowerShell 5.1
+pwsh -File tests\smoke.ps1                                # PowerShell 7
+```
+
+The Windows test runs the install twice, with symlinks and with the copies used without Developer Mode, and drives `agents` through the Git Bash shim.
+
 Before adopting a skill, subagent or command from somewhere else, run `agents audit <path>` on it. It prints every line that installs software, uses the network, mentions credentials, writes or deletes files, needs privileges, is destructive, bypasses permissions, or tells the agent to hide something from the user. It also flags symlinks, binaries and large files. Nothing is run, and an empty report isn't a guarantee of safety.
 
 ## Setup
@@ -311,7 +324,7 @@ The installer:
 
 It respects `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `COPILOT_HOME` if they're set.
 
-> **Windows:** folders are linked with junctions, which don't need admin. File symlinks need **Developer Mode** (Settings → System → For developers). Without it, files are copied instead and you'll see a warning; run the installer again after changes. The `agents` command runs through Git Bash, which comes with Git for Windows. Don't run `install.sh` from Git Bash; use `install.ps1`.
+> **Windows:** folders are linked with junctions, which don't need admin. File symlinks need **Developer Mode** (Settings → System → For developers). Without it, files are copied instead and you'll see a warning; run the installer again (or `agents update`) after changes. Copies are listed in `~/.agents/.copies`, so they're refreshed in place and removed like links; a copy you edited is moved to `<name>.bak.<timestamp>` rather than deleted. The `agents` command runs through Git Bash, which comes with Git for Windows. Don't run `install.sh` from Git Bash; use `install.ps1`.
 
 ### 2. Set up a project
 
@@ -407,4 +420,4 @@ Without the `agents` command, you can still update with `~/Agents/install.sh --u
 powershell -ExecutionPolicy Bypass -File $HOME\Agents\install.ps1 -Uninstall   # Windows
 ```
 
-This removes only the links, generated files and shims that come from this repo. To remove the preset from a project, run `agents setup` and choose `none`.
+This removes only the links, copies, generated files and shims that come from this repo. To remove the preset from a project, run `agents setup` and choose `none`.

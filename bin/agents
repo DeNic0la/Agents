@@ -466,18 +466,68 @@ changed_files() {
 # True if the file contains a NUL byte.
 is_binary() { ! tr -d '\000' < "$1" | cmp -s - "$1"; }
 
+# Facts about every preset skill from one awk run (a process per file takes minutes in
+# Git Bash), one "<skill><TAB><fact><TAB><value>" line each:
+#   name, description, compatibility  frontmatter values in SKILL.md
+#   key                               each frontmatter key in SKILL.md
+#   notice, router                    SKILL.md has the "Repo version first" notice / router: "true"
+#   recipe-description                frontmatter description in GENERATE.md
+#   adapter-key                       "<file>:<key>" for each top-level key in agents/*.yaml
+#   user-claude, user-codex           the adapter makes the skill user-invoked
+skill_facts() {
+  local dir f
+  local -a files=()
+  for dir in "$SRC"/skills/*/; do
+    for f in "$dir"SKILL.md "$dir"GENERATE.md "$dir"agents/*.yaml; do [ -f "$f" ] && files+=("$f"); done
+  done
+  [ ${#files[@]} -gt 0 ] || return 0
+  awk '
+    function value(v) { gsub(/^[ \t]+|[ \t]+$/, "", v); gsub(/^["\047]|["\047]$/, "", v); return v }
+    function fact(k, v) { print skill "\t" k "\t" v }
+    { sub(/\r$/, "") }
+    FNR == 1 {
+      n = split(FILENAME, p, "/"); file = p[n]; skill = p[n - 1]
+      if (skill == "agents") { skill = p[n - 2]; file = "agents/" file }
+      hasfm = ($0 == "---"); infm = hasfm; split("", seen); split("", flag)
+      if (hasfm) next
+    }
+    infm && $0 == "---" { infm = 0; next }
+    (infm || !hasfm) && /^[A-Za-z0-9_-]+:/ {
+      k = $0; sub(/:.*/, "", k)
+      if (file == "SKILL.md") fact("key", k)
+      else if (file ~ /^agents\//) fact("adapter-key", substr(file, 8) ":" k)
+    }
+    infm && match($0, /^[^:]+:/) {
+      k = substr($0, 1, RLENGTH - 1); v = value(substr($0, RLENGTH + 1))
+      if (!(k in seen)) {
+        seen[k] = 1
+        if (file == "SKILL.md" && (k == "name" || k == "description" || k == "compatibility")) fact(k, v)
+        if (file == "GENERATE.md" && k == "description") fact("recipe-description", v)
+      }
+    }
+    file == "SKILL.md" && index($0, ".agents/skills/" skill "/SKILL.md") && !flag["notice"]++ { fact("notice", 1) }
+    file == "SKILL.md" && /^[ \t]+router:[ \t]*"?true"?/ && !flag["router"]++ { fact("router", 1) }
+    file == "agents/claude.yaml" && /^disable-model-invocation:[ \t]*true/ && !flag["user"]++ { fact("user-claude", 1) }
+    file == "agents/openai.yaml" && /^[ \t]+allow_implicit_invocation:[ \t]*false/ && !flag["user"]++ { fact("user-codex", 1) }
+  ' "${files[@]}"
+}
+
 # Validates the preset: the skill rules (concepts/portable-skills), the README catalog,
 # file hygiene, and (as warnings) the change rules from the repo's AGENTS.md.
 cmd_check() {
   local errors=0 warnings=0 dir n name desc compat key f by kind want
   local -a listed=() changed=()
+  local -A fact=()
   err() { echo "error: $*"; errors=$((errors + 1)); }
   warn() { echo "warning: $*"; warnings=$((warnings + 1)); }
+  while IFS=$'\t' read -r n key f; do
+    case "$key" in key|adapter-key) fact[$n/$key]+="$f " ;; *) fact[$n/$key]="$f" ;; esac
+  done < <(skill_facts)
   for dir in "$SRC"/skills/*/; do
-    dir="${dir%/}"; n="$(basename "$dir")"
+    dir="${dir%/}"; n="${dir##*/}"
     f="$dir/SKILL.md"
     if [ ! -f "$f" ]; then err "skills/$n: missing SKILL.md"; continue; fi
-    name="$(frontmatter "$f" name)"; desc="$(frontmatter "$f" description)"; compat="$(frontmatter "$f" compatibility)"
+    name="${fact[$n/name]-}"; desc="${fact[$n/description]-}"; compat="${fact[$n/compatibility]-}"
     [ "$name" = "$n" ] || err "skills/$n: name '$name' must match the folder name"
     [[ "$name" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] && [ ${#name} -le 64 ] \
       || err "skills/$n: name must be 1-64 lowercase letters, digits and single hyphens"
@@ -485,30 +535,25 @@ cmd_check() {
     [ ${#compat} -le 500 ] || err "skills/$n: compatibility must be at most 500 characters"
     # A tailored skill has a recipe and the "Repo version first" notice; a global skill neither.
     if [ ! -f "$dir/GENERATE.md" ]; then
-      ! grep -qF ".agents/skills/$n/SKILL.md" "$f" \
+      [ -z "${fact[$n/notice]-}" ] \
         || err "skills/$n: has the 'Repo version first' notice but no GENERATE.md - add the recipe, or drop the notice to make it a global skill"
-    elif [ -z "$(frontmatter "$dir/GENERATE.md" description)" ]; then
+    elif [ -z "${fact[$n/recipe-description]-}" ]; then
       err "skills/$n: GENERATE.md needs a description in its frontmatter"
-    elif ! grep -qF ".agents/skills/$n/SKILL.md" "$f"; then
+    elif [ -z "${fact[$n/notice]-}" ]; then
       err "skills/$n: SKILL.md must tell agents to prefer the repo version at .agents/skills/$n/SKILL.md"
     fi
-    while IFS= read -r key; do
+    for key in ${fact[$n/key]-}; do
       if in_list "$key" $RUNTIME_CONTROLS; then
         err "skills/$n: '$key' is a runtime control - users opt in via .agents/overrides/<tool>/$n.yaml"
       elif ! in_list "$key" $SKILL_FIELDS; then
         err "skills/$n: '$key' is not an Agent Skills field - move it to metadata or agents/<tool>.yaml"
       fi
-    done < <(top_keys "$f")
-    for f in "$dir"/agents/*.yaml; do
-      while IFS= read -r key; do
-        in_list "$key" $RUNTIME_CONTROLS && err "skills/$n/agents/$(basename "$f"): '$key' is a runtime control - adapters must not set it"
-      done < <(top_keys "$f")
+    done
+    for key in ${fact[$n/adapter-key]-}; do
+      in_list "${key#*:}" $RUNTIME_CONTROLS && err "skills/$n/agents/${key%%:*}: '${key#*:}' is a runtime control - adapters must not set it"
     done
     # User-invoked must be declared for both tools that support it, or neither.
-    local claude_user=0 codex_user=0
-    grep -qE '^disable-model-invocation:[[:space:]]*true' "$dir/agents/claude.yaml" 2>/dev/null && claude_user=1
-    grep -qE '^[[:space:]]+allow_implicit_invocation:[[:space:]]*false' "$dir/agents/openai.yaml" 2>/dev/null && codex_user=1
-    [ "$claude_user" = "$codex_user" ] \
+    [ "${fact[$n/user-claude]-}" = "${fact[$n/user-codex]-}" ] \
       || err "skills/$n: user-invoked in only one adapter - set disable-model-invocation in agents/claude.yaml and allow_implicit_invocation in agents/openai.yaml together"
   done
   for f in "$SRC"/commands/*.md; do
@@ -522,7 +567,7 @@ cmd_check() {
     listed+=("skills/$n")
     if [ ! -d "$SRC/skills/$n" ]; then err "README.md: skill '$n' is listed but isn't in preset/skills"; continue; fi
     want=agent
-    grep -qE '^disable-model-invocation:[[:space:]]*true' "$SRC/skills/$n/agents/claude.yaml" 2>/dev/null && want=user
+    [ -z "${fact[$n/user-claude]-}" ] || want=user
     [ "$by" = "$want" ] || err "README.md: skill '$n' is invoked by $want, but the table says '$by'"
     want=tailored
     is_global_skill "skills/$n" && want=global
@@ -533,43 +578,47 @@ cmd_check() {
     [ -f "$SRC/agents/$n.md" ] || err "README.md: subagent '$n' is listed but isn't in preset/agents"
   done < <(catalog "$AGENTS_DIR/README.md" "Subagents in the preset")
   for dir in "$SRC"/skills/*/; do
-    n="$(basename "$dir")"
+    n="${dir%/}"; n="${n##*/}"
     in_list "skills/$n" ${listed[@]+"${listed[@]}"} || err "README.md: skill '$n' is missing from the 'Skills in the preset' table"
   done
   for f in "$SRC"/agents/*.md; do
-    n="$(basename "$f" .md)"
+    n="${f##*/}"; n="${n%.md}"
     in_list "agents/$n" ${listed[@]+"${listed[@]}"} || err "README.md: subagent '$n' is missing from the 'Subagents in the preset' table"
   done
 
   # Routers (metadata router: "true") list every other skill exactly once, each as it's invoked.
   local -a routed=()
-  for f in "$SRC"/skills/*/SKILL.md; do
-    grep -qE '^[[:space:]]+router:[[:space:]]*"?true"?' "$f" || continue
-    name="$(basename "$(dirname "$f")")"
+  for dir in "$SRC"/skills/*/; do
+    name="${dir%/}"; name="${name##*/}"
+    [ -n "${fact[$name/router]-}" ] || continue
     while IFS=$'\t' read -r n desc by; do
       if [ ! -d "$SRC/skills/$n" ]; then err "skills/$name: routes to '$n', which isn't in preset/skills"; continue; fi
       in_list "$n" ${routed[@]+"${routed[@]}"} && err "skills/$name: '$n' is in more than one router"
       routed+=("$n")
       want=agent
-      grep -qE '^disable-model-invocation:[[:space:]]*true' "$SRC/skills/$n/agents/claude.yaml" 2>/dev/null && want=user
+      [ -z "${fact[$n/user-claude]-}" ] || want=user
       [ "$by" = "$want" ] || err "skills/$name: '$n' is invoked by $want, but the router says '$by'"
-    done < <(catalog "$f" "Skills" "##")
+    done < <(catalog "${dir}SKILL.md" "Skills" "##")
   done
   if [ ${#routed[@]} -gt 0 ]; then
     for dir in "$SRC"/skills/*/; do
-      n="$(basename "$dir")"
-      grep -qE '^[[:space:]]+router:[[:space:]]*"?true"?' "$dir/SKILL.md" 2>/dev/null && continue
+      n="${dir%/}"; n="${n##*/}"
+      [ -z "${fact[$n/router]-}" ] || continue
       in_list "$n" "${routed[@]}" || err "skills/$n: not in any router - add it to the router for its area"
     done
   fi
 
   # Plain text files only: links don't survive a Windows checkout, and agents can't read binaries.
+  # One search per rule, not per file, so it stays fast in Git Bash.
   while IFS= read -r f; do
-    if [ -L "$f" ]; then err "${f#"$AGENTS_DIR"/}: symbolic links aren't allowed - commit the file itself"
-    elif [ -n "$(find "$f" -size +1024k)" ]; then err "${f#"$AGENTS_DIR"/}: larger than 1 MB"
-    elif is_binary "$f"; then err "${f#"$AGENTS_DIR"/}: binary file - the preset holds text only"
-    fi
-  done < <(find "$SRC" "$AGENTS_DIR/tools" \( -type f -o -type l \))
+    err "${f#"$AGENTS_DIR"/}: symbolic links aren't allowed - commit the file itself"
+  done < <(find "$SRC" "$AGENTS_DIR/tools" -type l)
+  while IFS= read -r f; do
+    err "${f#"$AGENTS_DIR"/}: larger than 1 MB"
+  done < <(find "$SRC" "$AGENTS_DIR/tools" -type f -size +1024k)
+  while IFS= read -r f; do
+    err "${f#"$AGENTS_DIR"/}: binary file - the preset holds text only"
+  done < <(LC_ALL=C grep -rlaP '\x00' "$SRC" "$AGENTS_DIR/tools")
 
   # Change rules from this repo's AGENTS.md. Only a person can judge them, so they warn.
   while IFS= read -r f; do [ -n "$f" ] && changed+=("$f"); done < <(changed_files)

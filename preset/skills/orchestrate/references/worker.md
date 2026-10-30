@@ -14,14 +14,14 @@ Each session runs at a tier from the model-tiers reference (`.agents/references/
 
 | Session | Phases | Tier |
 |---|---|---|
-| V | verify | `deep` |
-| T | triage | `deep` |
+| V | verify | `standard` |
+| T | triage | `standard` |
 | A | implement, QA restart | `standard` |
-| A | review restart, fix | `deep` |
-| B | refactor, ship | `deep` |
-| C | retro | `deep` |
+| A | review restart, fix | `standard`; `deep` when the change touches a critical domain or complex logic |
+| B | refactor, ship | `standard` |
+| C | retro | `standard` |
 
-Map the tier to a model of KIND and pass it with the CLI's own model option. When you don't know the option or the model, leave it out and log that the harness default was inherited. Never guess a model from a provider name.
+The `deep` triggers are those in the model-tiers reference. Map the tier to a model of KIND and pass it with the CLI's own model option. When you don't know the option or the model, leave it out and log that the harness default was inherited. Never guess a model from a provider name.
 
 ## Lifecycle
 

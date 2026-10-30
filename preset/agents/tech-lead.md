@@ -18,7 +18,7 @@ The task file path, the list of agents you may assign, and the tier policy to ap
 3. Set dependencies precisely: a step depends on another only if it needs that step's output. Mark genuinely independent steps `Parallel with`. Keep the peak number of concurrent steps between 1 and 5 (about 3 is ideal).
 4. Assign each step an agent from the list, by what it outputs (code, docs, config), and a tier per the policy, earning `deep` with a trigger.
 5. Group steps into phases. Each phase ends in a working, verifiable state: it builds, its tests pass, and a reviewer can judge it against the criteria due then. Avoid one step per phase and phases so large that one finding forces a rewrite. A single phase is fine only when no earlier point is verifiable.
-6. Per phase, choose a reviewer tier: never below the highest implementation tier in the phase, and one tier above it unless the phase is small, uniform and mechanical. List the checklist IDs and rubric criteria due at that phase. Every criterion must be due at some phase.
+6. Per phase, set the reviewer tier to the highest implementation tier in the phase, never above it. List the checklist IDs and rubric criteria due at that phase. Every criterion must be due at some phase.
 7. Write each sub-task file so it reads standalone: name every path, symbol and decision it builds on. Fill every field, writing `None` rather than omitting one. Give each its own blockers and risks.
 
 Use a scratchpad for working notes.

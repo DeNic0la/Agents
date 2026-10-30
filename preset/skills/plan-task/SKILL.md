@@ -33,7 +33,7 @@ Read first: `.agents/references/specs-workflow.md` (formats), `model-tiers.md` a
 Show the resolved configuration first, and track each stage and judge as a todo.
 
 1. **Pre-flight.** Check the task file exists in the right folder; create missing `.specs/` folders. Read only the task's title, type and `depends_on`. With `--refine`, follow [Refine](#refine) to pick the starting stage; with `--continue`, find the first stage whose section is missing.
-2. **Baseline tier.** Tier the whole task per `model-tiers.md` (by its title, type and the user's request) and say why. Every stage runs at the baseline tier except architecture synthesis, which runs one tier higher (capped at `deep`). A judge always runs at the tier of the stage it checks.
+2. **Baseline tier.** Tier the whole task per `model-tiers.md` (by its title, type and the user's request) and say why. Every stage runs at the baseline tier, except code exploration (2b), which is read-only and runs one tier lower (at least `fast`). A judge always runs at the tier of the stage it checks.
 3. **Analysis, in parallel:** `researcher` (2a), `code-explorer` (2b) and `business-analyst` (2c), each followed by its judge. Wait for all three to pass.
 4. **Architecture synthesis:** `software-architect` (3), then its judge.
 5. **Decomposition:** `tech-lead` (4), then its judge. Pass it the agents available in this harness (from `preset/agents/`, plus a general-purpose agent) and the selection rules from `model-tiers.md`.

@@ -10,4 +10,4 @@ This repo is my personal agent preset for Claude Code, Codex and GitHub Copilot.
 - Subagents in `preset/agents/` should only use frontmatter all three tools understand: `name`, `description`, and optionally `tools` and `model`. Codex agents are generated from them.
 - When a change affects behavior, update REQUIREMENTS.md and README.md as well.
 - Where each item is installed is defined in two places, `global_mappings` in `lib/common.sh` and `Get-Mappings` in `install.ps1`. Keep them in sync.
-- `install.sh` and `bin/agents` must run on Linux and WSL, and `bin/agents` also in Git Bash. `install.ps1` must run in Windows PowerShell 5.1 and PowerShell 7.
+- `install.sh` and `bin/agents` must run on Linux and WSL, and `bin/agents` also in Git Bash. `install.ps1` must run in Windows PowerShell 5.1 and PowerShell 7. After changing any of them or `lib/common.sh`, run `tests/smoke.sh` (Linux/WSL) and `tests/smoke.ps1` (in both PowerShell editions) where you can, and say which ones you couldn't run. In `bin/agents`, don't start a process per preset file: Git Bash makes that take minutes.

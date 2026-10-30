@@ -68,9 +68,10 @@ This repository holds a personal setup for AI coding agents that can be cloned o
 | P1 | Works on **Linux**, **native Windows**, and **Windows with WSL**. |
 | P2 | Windows and WSL keep separate home folders. Each one is installed separately, and both can use the same clone. |
 | P3 | Line endings stay correct across platforms: LF for everything except `.ps1`, `.cmd` and `.bat` (CRLF). |
-| P4 | On Windows nothing needs admin rights. Folders use junctions, and files use symlinks when Developer Mode allows them, otherwise copies with a warning. |
+| P4 | On Windows nothing needs admin rights. Folders use junctions, and files use symlinks when Developer Mode allows them, otherwise copies with a warning. Copies are recorded in `~/.agents/.copies`, refreshed in place on install and update, and removed like links (G6, G7); a copy edited since it was made is moved aside instead (G4). |
 | P5 | `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `COPILOT_HOME` are respected when they're set. |
-| P6 | `install.ps1` runs in Windows PowerShell 5.1 and PowerShell 7. `bin/agents` runs in bash on Linux and WSL, and in Git Bash on Windows. |
+| P6 | `install.ps1` runs in Windows PowerShell 5.1 and PowerShell 7, with and without Developer Mode. `bin/agents` runs in bash on Linux and WSL, and in Git Bash on Windows. Starting a process is slow in Git Bash, so `bin/agents` doesn't start one per preset file. |
+| P7 | Smoke tests check the platform requirements on a copy of the repo with temporary home folders: `tests/smoke.sh` on Linux and WSL, `tests/smoke.ps1` on Windows in both PowerShell editions. They cover install, a second install reporting only `ok`, a changed and a deleted preset item, `agents` in a project (`add`, `--dry-run`, `sync`, removing every item), and uninstall; on Windows both with symlinks and with copies (forced with `AGENTS_NO_SYMLINKS=1`). |
 
 ## 5. Global install (machine level)
 
@@ -81,8 +82,8 @@ This repository holds a personal setup for AI coding agents that can be cloned o
 | G3 | Folders get one link per entry. Content a tool manages itself (e.g. `~/.claude/skills/synced`) is never touched. |
 | G4 | Anything already in the way is moved to `<name>.bak.<timestamp>`, never deleted. |
 | G5 | Running the installer again is safe. Unchanged items are reported as `ok`. |
-| G6 | Links and generated files whose source was deleted from the repo are removed automatically. |
-| G7 | Uninstall removes only links, generated files and shims that come from this repo. |
+| G6 | Links, copies (P4) and generated files whose source was deleted from the repo are removed automatically. |
+| G7 | Uninstall removes only links, copies (P4), generated files and shims that come from this repo. |
 | G8 | The install puts an `agents` command on the PATH (`~/.local/bin`). On Windows it's a shim that runs the command through Git Bash. |
 
 ## 6. Global update
