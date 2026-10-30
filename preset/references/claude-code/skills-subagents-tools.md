@@ -23,7 +23,7 @@ Source: [Skills › Choose where skills load](https://code.claude.com/docs/en/sk
 - A skill and a file in `.claude/commands/`: the skill wins.
 - Project-root skill and nested skill: both load. `/deploy` runs the root one, `/apps/web:deploy` runs the nested one.
 - Plugin skill and any of the above: both load (plugin skills are namespaced).
-- In this preset: every global skill has a "Repo version first" notice, because a personal skill (`~/.claude/skills/`) shadows a project skill with the same name.
+- In this preset: every tailored skill's global `SKILL.md` has a "Repo version first" notice, because a personal skill (`~/.claude/skills/`) shadows a project skill with the same name.
 Source: [Skills › Resolve skills that share a name](https://code.claude.com/docs/en/skills#resolve-skills-that-share-a-name)
 
 ## Skill frontmatter

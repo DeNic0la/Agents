@@ -10,13 +10,13 @@ Every skill lives in its own directory under `preset/skills/`:
 skills/
   skill-name/
     SKILL.md           # Required: The skill definition (global version)
-    GENERATE.md        # Required: Recipe for a repo-tailored version
+    GENERATE.md        # Required unless the skill is global: Recipe for a repo-tailored version
     scripts/           # Optional: Runnable helpers used by the skill workflow
     references/        # Optional: Skill-specific reference documentation
     supporting-file.md # Optional: Reference material loaded on demand
 ```
 
-`SKILL.md` and `GENERATE.md` are the required files (see rule 4 in [CONCEPT.md](CONCEPT.md)). Add `scripts/` or `references/` only when the skill actually needs them, and omit them entirely for simpler skills.
+`SKILL.md` and `GENERATE.md` are the required files; a global skill has only `SKILL.md` (see rule 4 in [CONCEPT.md](CONCEPT.md)). Add `scripts/` or `references/` only when the skill actually needs them, and omit them entirely for simpler skills.
 
 ## SKILL.md Format
 
@@ -189,8 +189,8 @@ Don't duplicate content between skills — reference and link instead.
 
 Required:
 
-- A `preset/skills/<skill-name>/SKILL.md` file with the "Repo version first" notice
-- A `preset/skills/<skill-name>/GENERATE.md` recipe for a repo-tailored version
+- A `preset/skills/<skill-name>/SKILL.md` file, with the "Repo version first" notice unless the skill is global
+- A `preset/skills/<skill-name>/GENERATE.md` recipe for a repo-tailored version, unless the skill is global
 - Valid YAML frontmatter with `name` and `description`
 - A description that includes both what the skill does and when to use it
 

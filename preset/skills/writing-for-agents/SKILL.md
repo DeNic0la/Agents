@@ -1,6 +1,7 @@
 ---
 name: writing-for-agents
-description: Use when creating or editing any document an agent reads (a skill, AGENTS.md, CLAUDE.md, a subagent, or a doc reached by a pointer), or when one is ignored, followed inconsistently or getting long. How to write and structure it.
+description: Use when creating or editing any document or prompt an agent reads (a skill, AGENTS.md, CLAUDE.md, a subagent, a subagent brief or LLM prompt, or a doc reached by a pointer), or when one is ignored, followed inconsistently or getting long. How to write and structure it.
+license: MIT
 ---
 
 # Writing for Agents
@@ -12,6 +13,8 @@ Reference for writing any document an agent consumes: a skill, an `AGENTS.md` / 
 Related material:
 
 - [references/skill-mechanics.md](references/skill-mechanics.md): read when the document is a skill: the invocation choice (model- or user-invoked), splitting by invocation, and router skills.
+- [references/prompt-patterns.md](references/prompt-patterns.md): read when writing a one-off prompt (a subagent brief, a system prompt, a prompt template for an LLM call): structure and order, escalating from plain to examples, few-shot, reasoning, grounding, self-checks, iterating.
+- [references/persuasion.md](references/persuasion.md): read when a rule must hold under pressure and wording alone isn't enough: which persuasion principles to use for which kind of document, and which to avoid.
 - The concepts in `~/.agents/concepts/INDEX.md` (in a project, `.agents/concepts/`) are the rules these levers serve; read the index before adding agent instructions.
 - To prove a document actually changes agent behavior (baselines, pressure scenarios, wording micro-tests), use the `writing-skills` skill.
 
@@ -54,7 +57,7 @@ Push too little down and the top bloats; push too much and you hide material the
 
 Every step ends on a **completion criterion**, the condition that tells the agent the work is done. Two properties make it a lever:
 
-- **Clarity**: can the agent tell done from not-done? A vague bound ("understanding reached") invites **premature completion**: ending the step before it is genuinely done, attention slipping to _being done_. The visible steps still ahead (the **post-completion steps**) supply the pull; the criterion's clarity is the resistance. Defend in order: **sharpen the bound first** (local and cheap); only if it is irreducibly fuzzy _and_ you observe the rush, hide the later steps by splitting the sequence. Hiding only works across a real context boundary (a hand-off or a subagent dispatch; an inline call leaves the later steps in context and clears nothing).
+- **Clarity**: can the agent tell done from not-done? A vague bound ("understanding reached") invites **premature completion**: ending the step before it is genuinely done, attention slipping to _being done_. The visible steps still ahead (the **post-completion steps**) supply the pull; the criterion's clarity is the resistance. Defend in order: **sharpen the bound first** (local and cheap); only if it is irreducibly fuzzy _and_ you observe the rush, hide the later steps by splitting the sequence. Hiding only works across a real context boundary (a hand-off or a subagent dispatch; an inline call leaves the later steps in context and clears nothing). Without subagents, use a fresh session; if neither is possible, say that the steps are not independent.
 - **Demand**: how much it requires. "Every modified model accounted for" forces thorough work where "produce a change list" does not. Demand drives **legwork** (the digging the agent does within the work, latent in the wording rather than written as its own step), and it is not step-bound: "every rule applied" binds a body of flat reference just as "every step done" binds a sequence, which is how an all-reference document still carries an exhaustiveness bar.
 
 The strongest criteria are both checkable and exhaustive.

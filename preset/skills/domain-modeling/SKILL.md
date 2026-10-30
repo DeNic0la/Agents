@@ -1,13 +1,14 @@
 ---
 name: domain-modeling
-description: Use when the project's domain language is being changed rather than just read - discussing or challenging codebase terminology, writing or editing a GLOSSARY.md, or recording or editing an ADR. Builds and sharpens the domain model as you design.
+description: Use when the project's domain language is being changed rather than just read - discussing or challenging codebase terminology, resolving a vague or overloaded word, stress-testing how domain concepts relate, writing or editing a GLOSSARY.md, or recording or editing an ADR. Builds and sharpens the domain model as you design.
+license: MIT
 ---
 
 # Domain Modeling
 
 > **Repo version first:** if this repository has `.agents/skills/domain-modeling/SKILL.md`, follow that file instead of this one. It's tailored to the repository.
 
-Actively build and sharpen the project's domain model as you design. This is the *active* discipline: challenging terms, inventing edge-case scenarios, and writing the glossary and decisions down the moment they crystallise. (Merely *reading* `GLOSSARY.md` for vocabulary is not this skill: that's a one-line habit any skill can do. This skill is for when you're changing the model, not just consuming it.)
+Actively build and sharpen the project's domain model as you design. This is the *active* discipline: challenging terms, inventing edge-case scenarios, and writing the glossary and decisions down the moment they crystallise. (Merely *reading* `GLOSSARY.md` for vocabulary is not this skill: that's a one-line habit any skill can do. This skill is for when you're changing the model, not just consuming it.) For a technology choice rather than a domain decision, use the `architecture` skill, which writes ADRs in the same place and format.
 
 ## File structure
 
@@ -79,3 +80,4 @@ If any of the three is missing, skip the ADR.
 
 - [references/glossary-format.md](references/glossary-format.md): read when creating or editing a `GLOSSARY.md` or `GLOSSARY-MAP.md`: structure, rules, single vs multi-context.
 - [references/adr-format.md](references/adr-format.md): read when writing an ADR or deciding whether a decision qualifies for one: template, optional sections, numbering.
+- `ddd-deliverables.md` in the references folder (`.agents/references/`, else `~/.agents/references/`): read when a project is adopting DDD or a model needs checking for gaps: the strategic, tactical and evented artifacts it should have.

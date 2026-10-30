@@ -17,9 +17,13 @@ The whole map at low resolution, loaded once per session. Open tickets are **not
 
 ## Decisions so far
 
-<!-- the index: one line per closed ticket, enough to judge relevance, then zoom the link for the detail the ticket holds -->
+<!-- the index: one sentence per ticket resolved on the route, at most 30 words (out-of-scope closures go under Out of scope): the decision alone, enough to judge relevance; its reasons and detail stay in the ticket -->
 
-- [<closed ticket title>](link): <one-line gist of the answer>
+- [<closed ticket title>](link): <the answer's gist: one sentence, at most 30 words>
+
+## Added so far
+
+<!-- one line per kind: every field, state, command, file and concept the decisions so far add to the destination, so the map's growth is visible at a glance -->
 
 ## Not yet specified
 
@@ -27,7 +31,7 @@ The whole map at low resolution, loaded once per session. Open tickets are **not
 
 ## Out of scope
 
-<!-- see "Out of scope": work ruled beyond the destination; closed, never graduates -->
+<!-- see "Out of scope": work ruled beyond the destination or not needed to reach it; closed, never graduates -->
 ```
 
 ## Tickets
@@ -64,6 +68,8 @@ The map's **Not yet specified** section is where that dim view is written down: 
 ## Out of scope
 
 Fog only ever gathers _toward_ the destination. The destination fixes the scope, so work beyond it is **out of scope**: it isn't fog, and it doesn't belong in **Not yet specified**. It gets its own **Out of scope** section on the map: work you've consciously ruled out of _this_ effort. Scope, not sharpness, lands it here.
+
+"Not needed" is a full answer too. When a ticket resolves to "the destination is reached without this", close it the same way, with that reason on its Out of scope line.
 
 Out-of-scope work never graduates (the frontier stops at the destination), so it returns only if the destination is redrawn, and then as a fresh effort, not a resumption.
 

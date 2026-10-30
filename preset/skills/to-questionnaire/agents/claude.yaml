@@ -1,1 +1,2 @@
 disable-model-invocation: true
+argument-hint: "[decision or topic]"

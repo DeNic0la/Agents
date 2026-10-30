@@ -34,7 +34,7 @@ How they compose:
 preset/                  tool-neutral content, written once
   AGENTS.md              global instructions
   skills/<name>/SKILL.md skills: the global version (Agent Skills spec fields only)
-  skills/<name>/GENERATE.md  recipe for a repo-tailored version of the skill
+  skills/<name>/GENERATE.md  recipe for a repo-tailored version of the skill (none for global skills)
   skills/<name>/agents/  optional per-tool adapters (openai.yaml, claude.yaml)
   agents/<name>.md       subagents
   commands/<name>.md     slash commands (Claude Code only - prefer skills)
@@ -59,7 +59,7 @@ AGENTS.md                instructions for working on this repo itself (CLAUDE.md
 | Instructions, global | `~/.claude/CLAUDE.md` | `~/.codex/AGENTS.md` | `~/.copilot/copilot-instructions.md` |
 | Instructions, project | `CLAUDE.md` (imports `AGENTS.md`) | `AGENTS.md` | `AGENTS.md` |
 | Skills, global | `~/.claude/skills/` | `~/.agents/skills/` | `~/.agents/skills/` |
-| Skills, project (repo version) | `.claude/skills/` (mirror) | `.agents/skills/` | `.agents/skills/`, `.claude/skills/` |
+| Skills, project (repo version or global copy) | `.claude/skills/` (mirror) | `.agents/skills/` | `.agents/skills/`, `.claude/skills/` |
 | Subagents, global | `~/.claude/agents/<n>.md` | `~/.codex/agents/<n>.toml` (generated) | `~/.copilot/agents/<n>.agent.md` |
 | Subagents, project | `.claude/agents/` | `.codex/agents/` (generated) | `.github/agents/` |
 | Commands | `~/.claude/commands/`, `.claude/commands/` | – | – |
@@ -96,41 +96,163 @@ argument-hint: "What for?"           allow_implicit_invocation: false
 
 Copilot has no equivalent, so there they behave like any other skill. Start one by name: `/handoff` in Claude Code, `$handoff` in Codex.
 
+**Global skills.** Most skills are *tailored*: a project that selects one gets a version generated for that repository (see [Set up a project](#2-set-up-a-project)). A skill that has nothing to tailor is *global*: it has no `GENERATE.md` and no "Repo version first" notice, and a project that selects it gets a plain copy. To make a skill global, delete its `GENERATE.md` and the notice, and set its Kind to `global` below.
+
+**Routers.** There are too many skills to remember, so each area of work has a **router**: a user-invoked global skill that names the area's skills and when to reach for each. Start the router with what you want (`/build add CSV export`). It picks one skill: it uses that skill right away if the agent may start it, or tells you its name if only you can. Routers are marked `router: "true"` in their `metadata`. `agents check` makes sure every other skill is in exactly one router, and that each router shows correctly who invokes each skill. A new skill goes into its area's router.
+
 ### Skills in the preset
 
-| Skill | Use it to | Invoked by |
-|---|---|---|
-| **Understand and design** | | |
-| interview-me | find out what the user actually wants before anything exists | agent |
-| idea-refine | turn a vague idea into concrete variations and pick one | agent |
-| brainstorming | go from a request to an approved design doc | agent |
-| grilling | stress-test an existing plan, decision or idea in rounds of questions | agent |
-| domain-modeling | sharpen the project's language (`GLOSSARY.md`) and record decisions (ADRs) | agent |
-| grill-with-docs | grill a plan while keeping the glossary and ADRs current | user |
-| api-and-interface-design | design APIs and module interfaces | agent |
-| improve-codebase-architecture | find deepening opportunities and present them as an HTML report | user |
-| **Plan and hand off** | | |
-| planning-and-task-breakdown | break a spec into small, verifiable, ordered tasks | agent |
-| to-spec | turn the conversation into a spec in the issue tracker | user |
-| wayfinder | chart work too big for one session as a map of decision tickets | user |
-| to-questionnaire | write a questionnaire for someone who knows what you don't | user |
-| handoff | write a handoff document for the next agent session | user |
-| **Build and fix** | | |
-| source-driven-development | ground framework code in the official docs and cite them | agent |
-| systematic-debugging | find the root cause before proposing any fix | agent |
-| code-simplification | simplify code without changing behavior | agent |
-| performance-optimization | measure, then optimize | agent |
-| observability-and-instrumentation | add logs, metrics and traces | agent |
-| deprecation-and-migration | retire old code and migrate its users | agent |
-| **Write for agents** | | |
-| writing-for-agents | write or restructure a skill, AGENTS.md or any doc an agent reads | agent |
-| writing-skills | prove a skill changes agent behavior: baselines, pressure tests, closing loopholes | agent |
-| context-engineering | set up the context an agent works with | agent |
-| retro | review a session and improve the agent's environment | user |
-| wait-what | have the agent re-explain its last message in plain words | user |
-| teach | learn a topic over several sessions in a teaching workspace | user |
+Kind is `tailored` (projects generate their own version) or `global` (projects get a copy as it is). Each group starts with its router.
+
+| Skill | Use it to | Invoked by | Kind |
+|---|---|---|---|
+| **Think it through** | | | |
+| think | pick the skill for exploring what to build, testing an idea or settling a decision (router) | user | global |
+| interview-me | find out what the user actually wants before anything exists | agent | tailored |
+| idea-refine | turn a vague idea into concrete variations and pick one | agent | tailored |
+| brainstorming | go from a request to an approved design doc | agent | tailored |
+| ideate | generate grounded ideas for what to build next, critique them and rank the survivors | user | tailored |
+| grilling | stress-test an existing plan, decision or idea in rounds of questions | agent | tailored |
+| grill-me | start a grilling session on a plan or design (entry point to `grilling`) | user | global |
+| roast | have five independent reviewers attack a technical idea, then get one BUILD / RESHAPE / DROP verdict | user | tailored |
+| jury | put a hard decision to 3 or 5 blind-voting subagents and get one verdict with dissent | user | global |
+| what-would-you-do | have the agent explain its open question and recommend an answer, with the case for and against each option | user | global |
+| wait-what | have the agent re-explain its last message in plain words | user | tailored |
+| research | research a question against primary sources and save the cited findings as one Markdown file | agent | tailored |
+| prototype | build a throwaway prototype that answers one logic or UI design question | agent | tailored |
+| teach | learn a topic over several sessions in a teaching workspace | user | tailored |
+| **Design** | | | |
+| design | pick the skill for shaping the domain language, the architecture or an interface (router) | user | global |
+| domain-modeling | sharpen the project's language (`GLOSSARY.md`) and record decisions (ADRs) | agent | tailored |
+| grill-with-docs | grill a plan while keeping the glossary and ADRs current | user | tailored |
+| system-design | design a system or major component from requirements, with load estimates and trade-offs | agent | tailored |
+| architecture | compare technology options or review a design proposal, and record the decision as an ADR | agent | tailored |
+| codebase-design | design deep modules with a shared vocabulary for interfaces, seams and depth | agent | tailored |
+| api-and-interface-design | design APIs and module interfaces | agent | tailored |
+| improve-codebase-architecture | assess the architecture, stop if healthy, else design a deepening from an HTML report and plan it for `implement` | user | tailored |
+| **Plan and hand off** | | | |
+| planning | pick the skill for turning a decision into specs, tickets or tasks, or for handing work over (router) | user | global |
+| to-spec | turn the conversation into a spec in the issue tracker | user | tailored |
+| wayfinder | chart work too big for one session as a map of decision tickets | user | tailored |
+| to-tickets | break a plan or spec into tracer-bullet tickets with blocking edges in the issue tracker | user | tailored |
+| planning-and-task-breakdown | break a spec into small, verifiable, ordered tasks | agent | tailored |
+| triage | move issues and external PRs through triage states and write agent-ready briefs | user | tailored |
+| analyze-issue | write a technical spec for a tracker issue | user | tailored |
+| add-task | capture a request as a draft task in `.specs/tasks/draft/` | user | tailored |
+| plan-task | turn a draft into acceptance criteria, architecture and judged, phased sub-tasks | user | tailored |
+| to-questionnaire | write a questionnaire for someone who knows what you don't | user | tailored |
+| checkpoint | before compaction or a break, update the task tracking, record learnings and write the session state | user | tailored |
+| handoff | write a handoff document for the next agent session | user | tailored |
+| **Build** | | | |
+| build | pick the skill for building a change, from one fix to a whole spec (router) | user | global |
+| implement | build a spec, tracker tickets or issues test-first, then QA, review and fix it on a branch | user | tailored |
+| implement-spec | build a whole spec through parallel worktrees on one integration branch, ready for one PR | user | tailored |
+| orchestrate | work through the issue queue unattended in parallel Herdr lanes and git worktrees | user | tailored |
+| implement-task | implement a planned task one agent per step, with one code review per phase and a definition-of-done check | user | tailored |
+| do-in-steps | run a task as dependent steps, each checked by an independent judge before the next | user | tailored |
+| tdd | build or fix test-first at agreed seams, finishing with a mutation check | agent | tailored |
+| source-driven-development | ground framework code in the official docs and cite them | agent | tailored |
+| dependency-vetting | verify a package or tool is authentic and current before installing, adding or recommending it | agent | tailored |
+| documentation | write or update READMEs, API references, runbooks and guides for a named reader, checked against the code | agent | tailored |
+| file-conversion | convert a local file between image, audio, video, document and data formats with installed tools only, and verify the result | agent | tailored |
+| **Fix and improve** | | | |
+| improve | pick the skill for fixing, cleaning up or hardening code that already exists (router) | user | global |
+| systematic-debugging | find the root cause before proposing any fix | agent | tailored |
+| compound | record the reasoning behind a solved problem in `docs/solutions/` so it isn't investigated twice | agent | tailored |
+| code-simplification | simplify code without changing behavior | agent | tailored |
+| refactor | assess, then restructure code at method, file or project scope without changing behavior | user | tailored |
+| improve-file-structure | assess file placement and plan a behavior-preserving reorganization for `implement` | user | tailored |
+| testing-strategy | decide what to test at which level, and find coverage gaps, before writing tests | agent | tailored |
+| improve-tests | cut a test suite to the tests that catch real bugs and the shortest run time | user | tailored |
+| performance-optimization | measure, then optimize | agent | tailored |
+| observability-and-instrumentation | add logs, metrics and traces | agent | tailored |
+| deprecation-and-migration | retire old code and migrate its users | agent | tailored |
+| tech-debt | find, score and prioritize technical debt into a phased plan beside feature work | agent | tailored |
+| **Check, ship and operate** | | | |
+| ship | pick the skill for checking a change, getting it merged and released, and running it (router) | user | global |
+| qa | run the changed program the way its user would and check each requested behavior | agent | tailored |
+| code-review | review the changes since a fixed point against an optional spec, ending on a coded verdict | agent | tailored |
+| fix-findings | apply the findings of the most recent review, audit or check in this session | user | global |
+| commit | commit every change on the current branch with a Conventional Commit message, after a secrets scan | user | tailored |
+| pr | write a fast-to-review PR body: summary diagram, before/after evidence, merge danger | agent | tailored |
+| ship-pr | commit, push, open a PR, repair CI within a fixed budget, squash merge and verify post-merge workflows | user | tailored |
+| resolving-merge-conflicts | resolve a stopped merge or rebase from the intent of both sides, then run checks and finish | agent | tailored |
+| deploy-checklist | build and check a pre-deploy checklist with rollback triggers for one release | agent | tailored |
+| incident-response | triage an incident, post status updates, mitigate, and write a blameless postmortem | agent | tailored |
+| standup | turn recent commits, PRs, tickets or notes into a yesterday / today / blockers update | agent | global |
+| **Agent setup** | | | |
+| agent-setup | pick the skill for improving the agent itself: its skills, instructions, context and prompts (router) | user | global |
+| writing-for-agents | write or restructure a skill, AGENTS.md or any doc an agent reads | agent | tailored |
+| writing-skills | prove a skill changes agent behavior: baselines, pressure tests, closing loopholes | agent | tailored |
+| skill-review | sweep a skill collection for stale steps, missing gotchas, gaps and duplicates | agent | global |
+| agents-md-improver | audit agent instruction files against the codebase, or add a session's learnings to them | agent | tailored |
+| task-observer | save the user's lasting working preferences as rules in the instruction files | agent | global |
+| context-engineering | set up the context an agent works with | agent | tailored |
+| retro | review a session and improve the agent's environment | user | tailored |
+| diagnosing-sessions | find out, with transcript evidence, why a session went wrong, and report it to whoever maintains the skill or plugin involved | user | tailored |
+| optimize-prompt | rewrite a draft prompt for an AI chat into a clearer one, without running it | agent | global |
+| **Data** (global) | | | |
+| data | pick the skill for a data question, from one query to a shared dashboard (router) | user | global |
+| analyze | answer a business question with data, from a quick number to a formal report | agent | global |
+| explore-data | profile an unfamiliar table or file: grain, keys, nulls, distributions, quality issues | agent | global |
+| sql-queries | write, optimize, translate or debug analytical SQL in the user's dialect | agent | global |
+| statistical-analysis | pick and apply statistical methods and keep claims honest: tests, outliers, trends, forecasts | agent | global |
+| data-visualization | choose the right chart and build a clear, honest, accessible one in Python | agent | global |
+| build-dashboard | build a self-contained interactive HTML dashboard with KPIs, charts, filters and a table | agent | global |
+| validate-data | QA an analysis before it's shared and give a ready / caveats / needs-revision verdict | agent | global |
+| data-context-extractor | interview analysts and the schema to write or extend a company-specific data-analyst skill | agent | global |
+| **Product** (global) | | | |
+| product | pick the skill for product work: specs, roadmaps, sprints, research and updates (router) | user | global |
+| product-brainstorming | think out loud about product problems, ideas and strategy with a sparring partner | agent | global |
+| write-spec | write a PRD with goals, non-goals, user stories, requirements and metrics | agent | global |
+| roadmap-update | add, reprioritize or reschedule items on a product roadmap, or build one | agent | global |
+| sprint-planning | plan a team sprint with a goal, capacity, a scoped backlog and risks | agent | global |
+| synthesize-research | turn interviews, surveys and feedback into ranked, evidence-backed findings | agent | global |
+| competitive-brief | write a competitive analysis brief for competitors or a feature area | agent | global |
+| metrics-review | review product metrics for trends, a scorecard and recommended actions | agent | global |
+| stakeholder-update | write a status update tailored to execs, engineering, partners, customers or the board | agent | global |
+| **Customer support** (global) | | | |
+| support | pick the skill for customer support: triage, research, replies and knowledge base articles (router) | user | global |
+| ticket-triage | categorize, prioritize and route a customer support ticket, with a first reply | agent | global |
+| customer-research | research a customer question across sources with attribution and confidence | agent | global |
+| draft-response | draft a customer-facing reply tailored to the situation and relationship | agent | global |
+| kb-article | draft a searchable knowledge base article from a resolved issue or common question | agent | global |
+| **Productivity** (global) | | | |
+| productivity | pick the skill for the user's own tasks and working memory (router) | user | global |
+| productivity-start | set up TASKS.md, working memory and the dashboard, and learn the user's shorthand | user | global |
+| productivity-update | sync tasks from trackers, triage stale ones, and fill memory gaps | user | global |
+| task-management | keep the user's personal todos in TASKS.md | agent | global |
+| memory-management | decode and remember workplace shorthand in working memory and `memory/` | agent | global |
+
+`implement-spec` and `orchestrate` share [parallel-resources.md](preset/references/parallel-resources.md); in a project, add it along with them.
 
 Claude Code also gets `claude-handoff` (from `tools/claude/`), which starts a background `claude` session from a handoff.
+
+### Subagents in the preset
+
+The spec-driven skills dispatch the first group of personas. Their shared contract is in three references: [specs-workflow.md](preset/references/specs-workflow.md) (the `.specs/` layout and file formats), [model-tiers.md](preset/references/model-tiers.md) (picking `fast`, `standard` or `deep` per dispatch) and [judged-iteration.md](preset/references/judged-iteration.md) (scoring, retrying and accepting work). In a project, add those references along with the skills.
+
+The second group are specialists you or a skill can dispatch directly. They follow the domain-driven-design concept and use the preset's skills for details (for example `api-and-interface-design`, `observability-and-instrumentation`, `performance-optimization`). `backend-architect` also checks its design against [ddd-deliverables.md](preset/references/ddd-deliverables.md).
+
+| Subagent | Writes |
+|---|---|
+| **Spec-driven workflow** | |
+| business-analyst | a task's description and acceptance criteria |
+| researcher | a reusable research note in `.specs/research/` |
+| code-explorer | a codebase impact analysis in `.specs/analysis/` |
+| software-architect | a task's architecture overview |
+| tech-lead | the implementation process and one sub-task file per step |
+| developer | one step's code and tests; also checks the definition of done |
+| tech-writer | one step's documentation |
+| code-reviewer | a scored review of one phase, with issues attributed to steps |
+| meta-judge | an evaluation specification for one step |
+| judge | a scored evaluation of an artifact against a rubric or specification |
+| **Specialists** | |
+| backend-architect | a backend design: service boundaries, API contracts, communication, resilience, security and observability, with trade-offs |
+| backend-security-coder | backend code with security controls and tests, or a severity-ordered security review |
+| change-reviewer | a severity-ordered review of a diff, branch or pull request, with evidence and fixes |
+| java-developer | modern Java and Spring code with its tests |
+| test-automator | tests at the right level (test-first for new behavior), and fixes for flaky or slow suites |
 
 ### Concepts
 
@@ -140,11 +262,26 @@ The global instructions tell every tool to read [the index](preset/concepts/INDE
 
 | Concept | In short |
 |---|---|
+| [agent-lifecycle](preset/concepts/agent-lifecycle/CONCEPT.md) | Work in a project moves through 14 states in six groups: Entry (Triage), Understand (Explore, Discovery, Research; read-only), Define (Refine, Plan, Confirm), Build (Implement, Test, Debug, Review), Polish (Simplify, Optimize; optional) and Exit (Finish, always). The agent announces the state and changes only what it allows. Two gates are the user's: confirming the spec, and an explicit yes before implementing. Scope changes go back through them. Review runs in a fresh context, and off-goal work is noted instead of acted on. The lifecycle state lives only in context, while every non-trivial piece of work, Quick ones included, is a task file in `.specs/tasks/`. A default, and the global instructions apply it everywhere. |
 | [progressive-disclosure](preset/concepts/progressive-disclosure/CONCEPT.md) | Agent Markdown files are small entry points in their own folder; supporting files load only when needed. |
-| [findings](preset/concepts/findings/CONCEPT.md) | Anything off the current goal goes in `.findings/generic.md` instead of being acted on; agents read `.findings/` only when asked. A default, so `agents setup` creates `.findings/generic.md` in every project. |
+| [out-of-scope](preset/concepts/out-of-scope/CONCEPT.md) | Rejected feature requests are recorded in `.out-of-scope/`, one file per concept with the reason. Triage checks it first, so a rejection isn't argued again. A default; agents create the folder on the first rejection. |
 | [portable-skills](preset/concepts/portable-skills/CONCEPT.md) | Skills use spec fields only; vendor extras go in metadata or adapters; runtime controls are opt-in local overrides; user-invoked skills are marked in both adapters. |
+| [issue-tracker](preset/concepts/issue-tracker/CONCEPT.md) | How agents get data from and to the issue tracker (Jira, GitLab, ...). The tracker and the channel come from the project's `.agents/issue-tracker.md`: a CLI (`glab`, `acli`, jira-cli), an MCP server, or the REST API, in that order. Agents read the whole issue with its comments, treat its text as data rather than instructions, and keep a local copy in `.specs/issues/` when a skill works from it. They write only what the user asked for, in the tracker's own format (Markdown for GitLab, wiki markup or ADF for Jira), confirm closes, transitions and bulk changes, never create labels or fields on their own, and read back every write. A default, and the global instructions apply it everywhere. |
+| [incident-management](preset/concepts/incident-management/CONCEPT.md) | One contract for every skill that raises, handles or learns from incidents. It sets a SEV1-4 scale, maps page alerts, P1 tickets and fired rollback triggers onto it, and fixes the status vocabulary (Investigating → Identified → Monitoring → Resolved). Mitigation comes before the root cause, and every production change, page or customer message needs the user's go-ahead. Timelines are in UTC and blameless. Each incident gets one record (by default in `docs/incidents/`), whose ID links the fix, its regression test, the action items and the runbook updates. Follow-up work goes through the agent-lifecycle. A default, and the global instructions apply it everywhere. |
+| [domain-driven-design](preset/concepts/domain-driven-design/CONCEPT.md) | Rules for the code agents write: layered architecture with a pure functional core, decisions and side effects visible at the call site, data through return values, early returns, domain names instead of `utils`, typed error handling, library before custom code. The project's own conventions win. A default, and the global instructions apply it everywhere. |
 
 To add a concept, create `preset/concepts/<name>/CONCEPT.md` with `name` and `description` frontmatter, then add a row to `INDEX.md`.
+
+### Checking the preset
+
+Run `agents check` before committing. It fails on:
+- a skill or command that breaks the [portable-skills](preset/concepts/portable-skills/CONCEPT.md) rules
+- a skill or subagent missing from the tables above, a row for one that no longer exists, an "Invoked by" cell that doesn't match the skill's adapters, or a Kind cell that doesn't match whether the skill has a `GENERATE.md`
+- a symbolic link, a binary file or a file over 1 MB under `preset/` or `tools/`
+
+It also warns, without failing, when the uncommitted changes break a rule from this repo's `AGENTS.md`: `lib/common.sh` changed without `install.ps1` (or the reverse), or the installers or `bin/agents` changed without README.md and REQUIREMENTS.md.
+
+Before adopting a skill, subagent or command from somewhere else, run `agents audit <path>` on it. It prints every line that installs software, uses the network, mentions credentials, writes or deletes files, needs privileges, is destructive, bypasses permissions, or tells the agent to hide something from the user. It also flags symlinks, binaries and large files. Nothing is run, and an empty report isn't a guarantee of safety.
 
 ## Setup
 
@@ -198,15 +335,17 @@ Select items (e.g. 1 3-5, all, none; Enter keeps the * ones):
 
 Commit these files so teammates get the same setup, whichever tool they use.
 
-**Skills: repo version or global.** In the picker, every skill you select gets a *repo version*: a version of the skill tailored to this repository, which is always preferred over the global one. Skills you don't select stay global.
-- Every skill in this repo ships as both a global `SKILL.md` and a `GENERATE.md` recipe.
+**Skills: repo version or global.** In the picker, every tailored skill you select gets a *repo version*: a version of the skill tailored to this repository, which is always preferred over the global one. Skills you don't select stay global.
+- Every tailored skill in this repo ships as both a global `SKILL.md` and a `GENERATE.md` recipe.
 - For a repo version, `agents` copies the recipe to `.agents/recipes/skills/<name>.md`.
 - The agent generates `.agents/skills/<name>/` from it the first time the skill is needed, or when you ask ("generate the repo versions of our skills"). Codex and Copilot read that folder directly.
 - `agents sync` then mirrors it to `.claude/skills/<name>/` for Claude Code, applying your Claude overrides.
 - Until the repo version exists, the global version is used.
 - The generated skill belongs to the project. `agents remove` keeps it and tells you to delete it if you want to go back to the global version.
 
-Precedence differs per tool (Claude Code prefers the global skill, Copilot the project one). So every global `SKILL.md` starts with a "Repo version first" notice that sends the agent to the repo version when there is one, which works the same in all three tools.
+Precedence differs per tool (Claude Code prefers the global skill, Copilot the project one). So every tailored skill's global `SKILL.md` starts with a "Repo version first" notice that sends the agent to the repo version when there is one, which works the same in all three tools.
+
+A selected *global skill* (marked `(global, copied as is)` in the picker) has no recipe: `agents` copies it unchanged to `.agents/skills/<name>/` and mirrors it to `.claude/skills/<name>/`, so teammates without this preset get it too. It's managed like any other copied item: `agents update` refreshes it and `agents remove` deletes it.
 
 **Defaults:** the first time a repo is set up, the items in [preset/defaults.txt](preset/defaults.txt) are added automatically. In the picker they're pre-selected. You can remove them like any other item, and existing projects aren't changed when the list changes.
 
@@ -222,7 +361,7 @@ One more recipe isn't a default, because only some skills need it. Add it with `
 
 | Recipe | Generates | Used when |
 |---|---|---|
-| [issue-tracker.md](preset/references/issue-tracker.md) | `.agents/issue-tracker.md` | publishing specs or decision tickets: the tracker, labels, parent/child issues and blocking |
+| [issue-tracker.md](preset/references/issue-tracker.md) | `.agents/issue-tracker.md` | reading issues or publishing specs and decision tickets: the tracker, the channel, labels, statuses, parent/child issues and blocking. The issue-tracker concept holds the rules and the Jira and GitLab commands. |
 
 - `agents update` refreshes the recipe. Its line in the project's `AGENTS.md` tells agents to follow the generated file, and to generate it first if it's missing.
 - The agent inspects the project (its real tools, commands and test layers), writes the file without placeholders, and asks you to approve it.
@@ -236,7 +375,10 @@ Other project commands:
 | `agents add <item>...` | add items |
 | `agents remove <item>...` | remove items and all their copies |
 | `agents sync` | re-apply this project's items without pulling (e.g. after a repo skill was generated) |
-| `agents check` | validate the preset's skills and commands |
+| `agents check` | validate the preset (see below) |
+| `agents audit <path>...` | list review signals in third-party skills or agents before adding them to the preset (see below) |
+
+Add `--dry-run` to `setup`, `add`, `remove` or `sync` to see which items would be copied, removed or skipped, without changing anything.
 
 Files that already exist in the project and weren't added by `agents` are never overwritten, and nothing outside the managed blocks is changed. Hooks are copied to `.agents/hooks/` but not registered: hook configuration differs per tool (`.claude/settings.json`, `.codex/hooks.json`, `.github/hooks/*.json`).
 

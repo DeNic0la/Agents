@@ -1,6 +1,7 @@
 ---
 name: retro
 description: Conduct a retrospective on a coding session and suggest improvements to the agent's environment.
+license: MIT
 ---
 
 # Retro
@@ -9,11 +10,16 @@ description: Conduct a retrospective on a coding session and suggest improvement
 
 The user has asked for a **retrospective**. You are suggesting improvements to the coding agent's **environment** to improve future runs.
 
+## Supporting files
+
+- [references/session-sources.md](references/session-sources.md): read in step 2. How to run `scripts/session-evidence.mjs`, verify you have the right session, and search the transcripts your context lacks.
+- [references/outside-the-repo.md](references/outside-the-repo.md): read before proposing a change to any file outside the repository (global steering, hook rules, installed skills).
+
 ## Steps
 
 1. Use the `writing-for-agents` skill for the writing style guide.
 
-2. Read the primary sources for the session the user specifies. This may mean searching through session logs on this machine. If the user doesn't specify a session, default to the current one.
+2. Read the primary sources for the session the user specifies, defaulting to the current one. Run `node <this skill's folder>/scripts/session-evidence.mjs --host <claude|codex|cursor> --cwd <absolute working directory>`, adding one `--session <id-or-absolute-path>` per session. It returns normalized user, assistant, tool-error and summary records with source paths and line numbers. Never pick a transcript just because it's the newest. Then have a fresh reader search what your context lacks for friction: errors, denials, retries and corrections. If a source can't be read, name the exact gap and don't call the retrospective complete.
 
 3. Look for candidates for improvement in these categories.
 
@@ -22,10 +28,13 @@ The user has asked for a **retrospective**. You are suggesting improvements to t
 - **Coding standards**: should the **reviewer agent** be given a new rule to enforce? Should an existing rule be removed or clarified? Classify the violation first: a **mechanical** one (a fixed syntactic pattern, a banned API, an import shape, a file-location rule) gets a deterministic check, full stop: a custom rule in the repo's own linter, a new pre-commit hook, or a new CI job, whichever the repo's language and existing guardrail make cheapest. Default to building the check over writing the rule. Reserve `CODING_STANDARDS.md` for genuine **judgement calls** (cross-file consistency, "matches the surrounding style," anything no guardrail could ever substitute for). _Use when_ the reviewer agent failed to catch a mistake.
 - **Global AGENTS.md**: are there any steering instructions that should be moved to coding standards (or automated checks) instead? _Use when_ the AGENTS.md file is particularly large - in the repo OR the user's global scope.
 - **Tool economy**: did the agent make expensive tool calls that could be streamlined? Is there any custom tooling (CLI's, MCP's) that is particularly token-inefficient? _Use when_ the agent made an expensive tool call.
-- **No-ops**: look for instructions in steering files that don't modify the agent's behavior. _Use when_ the steering files are large and unwieldy.
+- **Drift**: does a steering file the session read name a path, command or rule the current code no longer supports? Do two steering files contradict each other? A contradiction ranks above plain staleness, because it actively misleads. Check only the steering files the session read; don't sweep the rest. _Use when_ the agent followed a stale pointer or got two conflicting instructions.
+- **Duplication and no-ops**: look for instructions in steering files that don't modify the agent's behavior. Use the two `writing-for-agents` terms. **Duplication**: a named artifact already states the same rule in its own text (a lint rule, a test, a code comment, another steering file); quote that file and line. A file on a related topic is not coverage. **No-op**: the model already does it by default. _Use when_ the steering files are large and unwieldy.
 - **Information access**: look for opportunities to increase the agent's access to information. Teeing dev server logs, readonly access to third-party services. _Use when_ a crucial piece of information was not available to the agent.
 
-4. Present these candidates to the user, in order of severity.
+4. Filter the candidates. Keep only **grounded** ones: the candidate names the moment in the session where the friction showed (a call, an error, a correction); when it cites a steering file, the section around the cited line governs the path the session took; and when it changes a file outside the repo, it targets that file's source (see [references/outside-the-repo.md](references/outside-the-repo.md)). Then keep one only if a future agent would plausibly repeat the mistake without the change, and the lesson isn't already recoverable from the code, tests, types, comments or existing docs. How long the session took or how bad it felt doesn't qualify a candidate. When a candidate touches an existing rule, doc or check that was wrong or incomplete, amend that artifact instead of adding a new one.
+
+5. Present the surviving candidates to the user, in order of severity. If none survive, say so and name why each was dropped.
 
 ## Reference
 
@@ -46,3 +55,4 @@ You have access to several files in the repo:
 - `.agents/definition-of-done.md` and the other project references: the standing bar every change must clear; a recurring miss may belong there.
 - Docs: use docs as references files, pointed to by other files. Look for existing docs before writing new ones.
 - Skills: use skills for docs (since their description goes into the agent's context window), or for user-invoked entry points. Follow the advice in the `writing-for-agents` skill.
+- Outside the repo: user-global steering, hook rules and installed skills are environment too. Trace a file's source before proposing an edit to it; see [references/outside-the-repo.md](references/outside-the-repo.md).

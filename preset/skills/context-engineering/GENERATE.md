@@ -26,6 +26,8 @@ Generate `.agents/skills/context-engineering/`: a version of the context enginee
      - session boundaries: where to persist status, decisions and verification results before starting fresh
    - **Context packing:** a real project map of the modules found above, one short section each, plus a selective-include example using real paths.
    - **Context budget:** what to cut first, what to protect and when to compress, naming this repo's noisy outputs (long logs, generated files, large fixtures).
+   - **Why context degrades:** the five patterns and the four moves (write, select, compress, isolate), naming where this repo writes state outside the window (plans, scratchpads, notes).
+   - **Verifying multi-agent output:** only if agents here hand work to other agents; name the checkpoints where a check belongs.
    - **Confusion management:** surface conflicts between docs and code, and missing requirements, with options; name where decisions get recorded here.
    - **MCP integrations:** only the servers this repo actually configures.
    - **Anti-Patterns**, **Common Rationalizations**, **Red Flags** and a **Verification** checklist, kept to the items that apply here.
@@ -33,5 +35,6 @@ Generate `.agents/skills/context-engineering/`: a version of the context enginee
    - the full project map, if it is too long for `SKILL.md`
    - a rules-file checklist, if the repo's rules file is missing or thin
    - confusion and planning templates, using a real conflict from this repo's docs and code where one exists
+   - the generic references from the global skill (fundamentals, degradation patterns, verification workflows), copied as they are unless this repo needs a different version
 4. **Keep it small.** `SKILL.md` stays under about 200 lines, with no placeholders.
 5. **Finish.** Show the skill to the user for approval, run `agents sync` so Claude Code gets its copy, and commit it.

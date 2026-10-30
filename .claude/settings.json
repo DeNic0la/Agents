@@ -1,0 +1,32 @@
+{
+  "enabledPlugins": {
+    "customer-support@anthropic-plugin-directory": false,
+    "code-modernization@anthropic-plugin-directory": false,
+    "website-design@anthropic-plugin-directory": false,
+    "hookify@anthropic-plugin-directory": false,
+    "supermatt@anthropic-plugin-directory": true,
+    "teach-me@anthropic-plugin-directory": false,
+    "strategy-frameworks@anthropic-plugin-directory": true,
+    "agent-protocols@anthropic-plugin-directory": false,
+    "headroom-large-file-and-log-reader@anthropic-plugin-directory": false,
+    "task-observer-learn-your-preferences@anthropic-plugin-directory": false,
+    "claude-memory@anthropic-plugin-directory": false,
+    "adaptive-agent@anthropic-plugin-directory": false,
+    "prompt-optimizer@anthropic-plugin-directory": false,
+    "superpowers@anthropic-plugin-directory": false,
+    "engineering@anthropic-plugin-directory": false,
+    "feature-dev@anthropic-plugin-directory": false,
+    "productivity@anthropic-plugin-directory": false,
+    "product-management@anthropic-plugin-directory": false,
+    "plugin-management@anthropic-plugin-directory": false,
+    "claude-md-management@anthropic-plugin-directory": false,
+    "skills-for-real-engineers@anthropic-plugin-directory": false,
+    "setup-audit@anthropic-plugin-directory": false,
+    "serena@anthropic-plugin-directory": false,
+    "convertapi@anthropic-plugin-directory": false,
+    "agent-recall@anthropic-plugin-directory": false,
+    "subgraphs-skills@anthropic-plugin-directory": true,
+    "skill-memo@anthropic-plugin-directory": false,
+    "the-safety-net@anthropic-plugin-directory": false
+  }
+}

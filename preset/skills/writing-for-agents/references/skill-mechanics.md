@@ -11,6 +11,8 @@ Two choices, trading the two loads:
 
 Pick model-invocation only when the agent must reach the skill on its own, or another skill must. If it only ever fires by hand, make it user-invoked.
 
+User-invoked is for deliberate human entry, never a security boundary: some tools only hide the skill from the catalog rather than block the agent from running it. Guard anything dangerous by other means.
+
 Shared reference that two user-invoked skills both need can live in neither: neither can fire the other. Push it to a plain file outside the skill system: a reference any skill can point at.
 
 ## Splitting by invocation

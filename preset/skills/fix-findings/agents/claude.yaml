@@ -1,0 +1,2 @@
+disable-model-invocation: true
+argument-hint: "[which findings, e.g. 2-4 or S1 C1, or the findings' own text]"

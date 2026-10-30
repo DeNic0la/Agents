@@ -32,6 +32,51 @@ After:  "Import issue traced to a circular dependency in src/lib/db.ts —
 
 The detail is gone; the decision is preserved. If the detail turns out to matter, the summary is a breadcrumb for re-investigation.
 
+What each kind of content keeps when compressed:
+
+| Content | Keep | Drop |
+|---|---|---|
+| Tool output | findings, numbers, conclusions | raw output |
+| Conversation turns | decisions, commitments, changes of direction | back-and-forth |
+| Retrieved documents | the facts and claims the task uses | supporting elaboration |
+| Rules, task definition, hard constraints | everything | never compress |
+
+Compress in that order: tool output first, then old turns, then retrieved documents.
+
+## Mask old tool output
+
+Once a tool result has served its decision, replace it with a compact reference (the command, the file, the one-line finding) that can be re-run or re-read if needed.
+
+- **Never mask:** output from the latest turn, output critical to the current task, output still in active reasoning.
+- **Consider masking:** output from three or more turns ago, and verbose output whose key points can be extracted.
+- **Always mask:** repeated output, boilerplate, and output already summarized in the conversation.
+
+## Partition across subagents
+
+The strongest lever: give a subtask its own clean context, so its exploration never lands in the coordinator's window. Partition when the task splits into independent subtasks, when subtasks need different specialized context or have conflicting requirements, or when accumulated context threatens the limit.
+
+- **Hand off lean.** Give the subagent the goal, the paths and constraints it needs, and the output format, not the coordinator's history:
+
+  ```
+  Good: "Review src/auth/ for security issues. Return findings as
+         file:line, severity, one-line description."
+  Bad:  "I need you to look at the authentication module, which is in
+         src/auth/ and contains login.ts, session.ts, tokens.ts... [500 more tokens]"
+  ```
+
+- **Aggregate deliberately.** Check every partition finished, merge compatible results, resolve conflicts between them, and summarize if the combined result is still too large.
+
+## Which technique when
+
+| What dominates the window | Apply |
+|---|---|
+| Tool output | masking |
+| Retrieved documents | summarizing, or partitioning |
+| Message history | compaction with summaries |
+| Several of these | combine them |
+
+Measure first: look at what is actually filling the window before choosing.
+
 ## Order for recency
 
 Put the most task-critical content **last** in context. Models recall content at the start and end of the window more reliably than the middle (the lost-in-the-middle effect — Liu et al., 2023). Keep stable rules and specs at the start; put the active task material last, closest to the generation point:

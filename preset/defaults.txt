@@ -3,4 +3,8 @@
 references/definition-of-done.md
 references/testing-patterns.md
 references/observability-checklist.md
-concepts/findings
+concepts/out-of-scope
+concepts/domain-driven-design
+concepts/agent-lifecycle
+concepts/issue-tracker
+concepts/incident-management

@@ -1,0 +1,2 @@
+disable-model-invocation: true
+argument-hint: "<question or decision> [5 for a five-seat panel]"

@@ -6,9 +6,13 @@ Each concept is a folder with `CONCEPT.md` as its entry point. Open a concept on
 
 | Concept | Applies when |
 |---|---|
+| [agent-lifecycle](agent-lifecycle/CONCEPT.md) | always, for any work in a project: which state the work is in, what that state may change, when to move on, and how to finish |
 | [progressive-disclosure](progressive-disclosure/CONCEPT.md) | writing or restructuring any Markdown file meant for an AI agent |
-| [findings](findings/CONCEPT.md) | always, in a project with a `.findings/` folder: something off the current goal comes up, or you're asked to work through findings |
-| [portable-skills](portable-skills/CONCEPT.md) | writing a skill or command, deciding who may invoke a skill, or adding tool-specific or runtime settings (allowed-tools, context, ...) to one |
+| [out-of-scope](out-of-scope/CONCEPT.md) | triaging an issue or PR, or a maintainer rejects an enhancement: check and record rejections in `.out-of-scope/` |
+| [portable-skills](portable-skills/CONCEPT.md) | writing a skill or command, deciding who may invoke a skill or whether it is tailored or global, or adding tool-specific or runtime settings (allowed-tools, context, ...) to one |
+| [issue-tracker](issue-tracker/CONCEPT.md) | reading an issue from, or writing an issue, comment, label, link or status to, the project's issue tracker (Jira, GitLab, ...) |
+| [incident-management](incident-management/CONCEPT.md) | production is down or degraded, an alert or rollback trigger fires, a P1 ticket reports an outage, or you write or read an incident record, status update, postmortem or incident follow-up |
+| [domain-driven-design](domain-driven-design/CONCEPT.md) | writing, reviewing or refactoring application code: layering, pure core, explicit call sites, domain naming, error handling, library first |
 
 ## Adding a concept
 

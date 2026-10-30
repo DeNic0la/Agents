@@ -1,0 +1,2 @@
+disable-model-invocation: true
+argument-hint: "[issue or PR number, or a request]"

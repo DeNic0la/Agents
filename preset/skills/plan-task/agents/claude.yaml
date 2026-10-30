@@ -1,0 +1,2 @@
+disable-model-invocation: true
+argument-hint: "<draft task file> [--fast | --one-shot] [--refine] [--continue [stage]] [--target-quality X.X]"

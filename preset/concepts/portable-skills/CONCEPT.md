@@ -1,6 +1,6 @@
 ---
 name: portable-skills
-description: Shared skills use only Agent Skills spec fields; vendor extras go in metadata or per-tool adapter files, and runtime controls are opt-in local overrides.
+description: Shared skills use only Agent Skills spec fields; vendor extras go in metadata or per-tool adapter files, runtime controls are opt-in local overrides, and each skill is tailored (with a recipe) or global.
 ---
 
 # Portable skills
@@ -18,10 +18,12 @@ Applies to every skill (`SKILL.md`) and command written for more than one agent 
 3. **Runtime controls are opt-in, never a default.** `allowed-tools`, `disallowed-tools`, `context`, `agent`, `model` and `effort` decide how a skill runs for one user's agent and workflow. They never go in the shared `SKILL.md`, a shared command or an adapter. Each user adds them in their own override file:
    - `.agents/overrides/<tool>/<skill>.yaml` for a project
    - `~/.agents/overrides/<tool>/<skill>.yaml` for one machine
-4. **Every skill ships two ways:** a global version and a recipe for a repo version.
+4. **A skill is tailored or global.** A tailored skill (the default) ships two ways: a global version and a recipe for a repo version.
    - The global `SKILL.md` starts with a "Repo version first" notice telling agents to follow `.agents/skills/<name>/SKILL.md` instead when the repository has one.
    - `GENERATE.md` is the recipe: it has a `description` in its frontmatter and says what to inspect in a repository and how to write a version tailored to it. The generated version omits the notice.
    - The notice is needed because precedence differs per tool: Claude Code prefers the global skill over the project one, so precedence alone can't put the repo version first.
+
+   A **global skill** has nothing worth tailoring per repository: it has no `GENERATE.md` and no notice, and a project that wants it gets a plain copy. Make a skill global only when a repo version would be the same as the global one.
 5. **Follow the spec's folder layout:** `scripts/`, `references/` and `assets/` next to `SKILL.md`, with references one level deep (see [progressive-disclosure](../progressive-disclosure/CONCEPT.md)).
 6. **Choose who invokes it.** By default the agent can invoke a skill on its own (model-invoked), and its description sits in context every session. A skill that should run only when the user asks for it (a pure entry point, or one with side effects like publishing an issue) is **user-invoked**. That's set in both adapters, never in the shared frontmatter:
    - `agents/claude.yaml`: `disable-model-invocation: true`, plus `argument-hint` if it takes arguments

@@ -18,7 +18,7 @@ Generate `.agents/skills/domain-modeling/`: a version of the domain-modeling dis
    - **File structure:** this repo's actual glossary and ADR locations (single or multi-context), created lazily.
    - **During the session:** challenge against the glossary, sharpen fuzzy language, discuss concrete scenarios from this domain, cross-reference with code, update the glossary inline (glossary only, no implementation details), offer ADRs sparingly (hard to reverse, surprising without context, a real trade-off).
 3. **Put details in supporting files** under `references/`, each with a "read when" line in `SKILL.md`:
-   - the glossary format, with this repo's context names in the examples
-   - the ADR format, with this repo's location and numbering
+   - the glossary format (terms, `_Avoid_` lists, optional relationships), with this repo's context names in the examples
+   - the ADR format, with this repo's location and numbering (per context in a multi-context layout)
 4. **Keep it small.** `SKILL.md` stays under about 120 lines, with no placeholders.
 5. **Finish.** Show the skill to the user for approval, run `agents sync` so Claude Code gets its copy, and commit it.

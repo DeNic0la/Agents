@@ -1,74 +1,99 @@
 ---
 name: improve-codebase-architecture
-description: Scan a codebase for deepening opportunities, present them as a visual HTML report, then grill through whichever one you pick.
+description: Assess a codebase's architecture, stop if it's healthy, otherwise present deepening opportunities as a visual HTML report, then design the one you pick and plan it for the `implement` skill.
 ---
 
 # Improve Codebase Architecture
 
 > **Repo version first:** if this repository has `.agents/skills/improve-codebase-architecture/SKILL.md`, follow that file instead of this one. It's tailored to the repository.
 
-Surface architectural friction and propose **deepening opportunities**: refactors that turn shallow modules into deep ones. The aim is testability and AI-navigability.
+Surface architectural friction and propose **deepening opportunities**: refactors that turn shallow modules into deep ones. The aim is testability and AI-navigability. The skill starts with an assessment: if the architecture is healthy, it says so and stops. It ends with a plan that the `implement` skill builds. It changes no code.
 
 This skill is _informed_ by the project's domain model and built on a shared design vocabulary:
 
-- Read [references/design-vocabulary.md](references/design-vocabulary.md) for the architecture vocabulary (**module**, **interface**, **depth**, **seam**, **adapter**, **leverage**, **locality**) and its principles (the deletion test, "the interface is the test surface", "one adapter = hypothetical seam, two = real"). Use these terms exactly in every suggestion, and don't drift into "component," "service," "API," or "boundary."
+- Use the `codebase-design` skill first. Use its terms exactly (**module**, **interface**, **depth**, **seam**, **adapter**, **leverage**, **locality**, **information leakage**), and don't drift into "component," "service," "API," or "boundary." Its red flags name structural defects, its deepening reference holds the dependency categories and seam discipline, and its design-it-twice reference holds the parallel interface design.
 - The domain language in `GLOSSARY.md` gives names to good seams; ADRs in `docs/adr/` record decisions this skill should not re-litigate.
+
+**Architecture vs refactoring:** this skill handles structure: module boundaries, interfaces, testability. A code-level problem inside a well-bounded module (complexity, duplication, naming, dead code) is refactoring: point the user to the `refactor` skill. Cleaning up a new module's internals after an architectural change is also a separate refactoring pass.
+
+## Guardrails
+
+1. **Deep is not big.** A deep module hides complexity behind a small interface; it doesn't own every concern it touches. If describing it needs "and" more than once, it's a god object: split it. A deep module can delegate inside to focused collaborators.
+2. **Separate, don't combine.** Deepening consolidates *one concept* scattered across files. It doesn't merge unrelated concepts that happen to be called together. Before proposing a merge, ask: "Same concern, or just co-located?"
+3. **Architecture has a ceiling.** Small projects (under about 20 files) with low coupling rarely need structural work. The default verdict is **Healthy**: don't invent work.
+4. **Every new element must pay for itself.** An interface, argument, class or port is something someone has to learn. Propose it only if it removes more complexity than it adds.
 
 ## Process
 
 ### 1. Explore
 
-**Scope before you scan: YAGNI.** Deepening a module pays off by making future changes to it easier, so put extra weight on the parts of the codebase that have recently changed. Decide *where* to look before you look:
+**Scope before you scan: YAGNI.** Deepening pays off by making future changes easier, so weight the parts that keep changing:
 
-- If the user named a direction (a module, a subsystem, a pain point), take it, and skip the inference below.
-- Otherwise, walk back a good stretch of the commit history (`git log --oneline`) to find the codebase's hot spots, the files and areas that keep coming up, and let those paths pull your attention first. If the changes are scattered with no clear hot spot, widen the net.
+- If the user named a direction (a module, a subsystem, a pain point), take it and skip the rest of this list.
+- Otherwise find the hot spots: count changes per file over the last year (`git log --since="12 months ago" --name-only --pretty=format:`), leaving out bot commits and bulk reformat or move commits. Rank the most-changed files by complexity and look there first.
+- If changes are scattered with no clear hot spot, widen the net to the whole codebase.
 
-Read the project's domain glossary (`GLOSSARY.md`) and any ADRs in the area you're touching first.
+Read the glossary and the ADRs that cover the scoped area.
 
-Then spawn a subagent with a fresh context window to walk the codebase (without subagents, walk it yourself). Don't follow rigid heuristics; explore organically and note where you experience friction:
+**Map the structure.** Have a subagent with a fresh context produce a structural inventory of the scoped area and return only the map (without subagents, build it yourself and say so): modules or packages with rough size, which imports which, circular dependencies, and per module its exported symbols and callers (from a symbol-aware search where available; mark grep-based counts `grep-only`). Record the scope with the map. It's the baseline that keeps later sessions from redoing the analysis.
+
+**Explore for friction.** Read the scoped hot spots yourself, guided by the map: the verdict, the candidates and the design briefs rest on code you've seen. Use fresh read-only subagents only for sweeps outside the hot spots. Don't follow rigid heuristics; note where you feel friction, and name it with a `codebase-design` red flag where one fits:
 
 - Where does understanding one concept require bouncing between many small modules?
 - Where are modules **shallow**, with an interface nearly as complex as the implementation?
-- Where have pure functions been extracted just for testability, but the real bugs hide in how they're called (no **locality**)?
-- Where do tightly-coupled modules leak across their seams?
-- Which parts of the codebase are untested, or hard to test through their current interface?
+- Where is one design decision encoded in two or more modules (**information leakage**), especially back-door leakage that shows in no interface? It's the most expensive defect to leave in place.
+- Where have pure functions been extracted just for testability, while the real bugs hide in how they're called (no **locality**)?
+- Where do tightly coupled modules leak across their seams?
+- Which parts are untested, or hard to test through their current interface?
 
-Apply the **deletion test** to anything you suspect is shallow: would deleting it concentrate complexity, or just move it? A "yes, concentrates" is the signal you want.
+Apply the **deletion test** to anything you suspect is shallow. Visit every module in the map, and record what you skip and why. Skip what's shallow by design: thin adapters, data classes with no logic, configuration loaders, one-line wrappers.
 
-### 2. Present candidates as an HTML report
+### 2. Assess
 
-Write a self-contained HTML file to the OS temp directory so nothing lands in the repo. Resolve the temp dir from `$TMPDIR`, falling back to `/tmp` (or `%TEMP%` on Windows), and write to `<tmpdir>/architecture-review-<timestamp>.html` so each run gets a fresh file. Open it for the user (`xdg-open <path>` on Linux, `open <path>` on macOS, `start <path>` on Windows) and tell them the absolute path.
+This step is mandatory. Judge the scoped area on **coupling** (fan-out, cycles, shared mutable state), **cohesion**, **testability** (structural, not code-level) and **navigability**. Every finding must name the symptom a reader actually meets: **change amplification** (a simple change touches many places), **cognitive load** (too much to hold in your head) or **unknown unknowns** (you can't tell what you need to know; the worst). A finding with none of these is a preference: drop it.
 
-The report uses **Tailwind via CDN** for layout and styling, and **Mermaid via CDN** for diagrams where a graph/flow/sequence reliably communicates the structure. Mix Mermaid with hand-crafted CSS/SVG visuals: use Mermaid when relationships are graph-shaped (call graphs, dependencies, sequences), and hand-built divs/SVG when you want something more editorial (mass diagrams, cross-sections, collapse animations). Each candidate gets a **before/after visualisation**. Be visual.
+| Verdict | Meaning | Action |
+|---|---|---|
+| **Healthy** | Sound architecture, minor friction only | Say so, name the friction, point to the `refactor` skill for code-level cleanup, and **stop**. |
+| **Localized** | One or two areas have structural problems | Present only those, at most two this session. |
+| **Systemic** | Widespread structural problems | Present ranked candidates; recommend two or three this session. |
 
-For each candidate, render a card with:
+- **Idempotency:** if this skill ran recently and its changes were implemented, that area is Healthy. If it's still a problem for the same reasons, diagnose what went wrong instead of proposing another round.
+- **ADR conflicts:** surface a candidate that contradicts an ADR only when the friction is real enough to reopen it, and say which ADR and why.
+- **User override:** if the user gives a specific reason to proceed on Healthy code, scope strictly to it.
 
-- **Files**: which files/modules are involved
-- **Problem**: why the current architecture is causing friction
-- **Solution**: plain English description of what would change
-- **Benefits**: explained in terms of locality and leverage, and how tests would improve
-- **Before / After diagram**: side-by-side, custom-drawn, illustrating the shallowness and the deepening
-- **Recommendation strength**: one of `Strong`, `Worth exploring`, `Speculative`, rendered as a badge
+### 3. Present candidates as an HTML report
 
-End the report with a **Top recommendation** section: which candidate you'd tackle first and why.
-
-**Use GLOSSARY.md vocabulary for the domain, and the design vocabulary for the architecture.** If `GLOSSARY.md` defines "Order," talk about "the Order intake module," not "the FooBarHandler," and not "the Order service."
-
-**ADR conflicts**: if a candidate contradicts an existing ADR, only surface it when the friction is real enough to warrant revisiting the ADR. Mark it clearly in the card (e.g. a warning callout: _"contradicts ADR-0007, but worth reopening because…"_). Don't list every theoretical refactor an ADR forbids.
+Write a self-contained HTML report to the OS temp directory, open it, and give the user its absolute path. Read [references/report.md](references/report.md) for the file location, the card fields and the visuals. Name every candidate in the `GLOSSARY.md` vocabulary ("the Order intake module", not "the FooBarHandler"). Split or reject a candidate whose single-responsibility sentence needs "and" more than once; if a simple, complete description is hard to write at all, that difficulty is the diagnosis.
 
 Do NOT propose interfaces yet. After the file is written, ask the user: "Which of these would you like to explore?"
 
-### 3. Grilling loop
+### 4. Grill and design
 
-Once the user picks a candidate, use the `grilling` skill to walk the decision tree with them: constraints, dependencies, the shape of the deepened module, what sits behind the seam, what tests survive.
+Once the user picks a candidate, use the `grilling` skill to walk the decision tree with them: constraints, dependencies, the shape of the deepened module, what sits behind the seam, what tests survive, and the "what stays out" boundary from the report.
 
-Side effects happen inline as decisions crystallize; use the `domain-modeling` skill to keep the domain model current as you go:
+For the interface itself, follow the design-it-twice reference of `codebase-design`: radically different interfaces from parallel fresh-context subagents, each brief carrying the files (paths and key line ranges), the coupling, the dependency category and the "what stays out" boundary. Reject any design that is a god object, and say why. Then recommend one. Be opinionated.
 
-- **Naming a deepened module after a concept not in `GLOSSARY.md`?** Add the term to `GLOSSARY.md`. Create the file lazily if it doesn't exist.
-- **Sharpening a fuzzy term during the conversation?** Update `GLOSSARY.md` right there.
-- **User rejects the candidate with a load-bearing reason?** Offer an ADR, framed as: _"Want me to record this as an ADR so future architecture reviews don't re-suggest it?"_ Only offer when the reason would actually be needed by a future explorer to avoid re-suggesting the same thing; skip ephemeral reasons ("not worth it right now") and self-evident ones.
-- **Want to explore alternative interfaces for the deepened module?** Use the design-it-twice pattern in [references/design-vocabulary.md](references/design-vocabulary.md).
+Side effects happen inline as decisions crystallize; use the `domain-modeling` skill to keep the domain model current:
+
+- **Naming a deepened module after a concept not in `GLOSSARY.md`?** Add the term. Create the file lazily if it doesn't exist.
+- **Sharpening a fuzzy term?** Update `GLOSSARY.md` right there.
+- **User rejects the candidate with a load-bearing reason?** Offer an ADR: _"Want me to record this as an ADR so future architecture reviews don't re-suggest it?"_ Skip ephemeral reasons ("not worth it right now") and self-evident ones.
+
+### 5. Write the plan
+
+Once the user picks an interface (or accepts your recommendation), write the plan with the template in [references/plan.md](references/plan.md).
+
+### 6. Hand off
+
+Stay in this session, since the build needs the grilling as it happened, and tell the user the next step:
+
+- **The change takes more than one session:** the `to-spec` skill, then `to-tickets`, then `implement` per ticket. The plan is the spec's input.
+- **It fits in this session:** the `implement` skill with the plan as the spec. It writes tests at the new interface first through `tdd`, then checks the change with `qa` and `code-review`.
+
+To tackle another candidate later, the user runs this skill again on that cluster in a fresh session.
 
 ## Supporting files
 
-- [references/design-vocabulary.md](references/design-vocabulary.md): read before exploring, and whenever you name, judge or redesign a module: the vocabulary, the deletion test, seams and adapters, design-it-twice.
+- [references/report.md](references/report.md): read when writing the HTML report in step 3.
+- [references/plan.md](references/plan.md): read when writing the plan in step 5.

@@ -22,7 +22,8 @@ Generate `.agents/skills/writing-for-agents/`: a version of the agent-document w
    - **Leading words** and **negation**: prompt the positive.
    - **Pruning:** single source of truth, environment as source of truth, relevance, sediment, no-ops.
 3. **Put details in supporting files** under `references/`, each with a "read when" line in `SKILL.md`:
-   - skill mechanics: the invocation choice, splitting by invocation and router skills, with the adapter rules from the portable-skills concept linked rather than restated
+   - skill mechanics: the invocation choice (user-invoked is not a security boundary), splitting by invocation and router skills, with the adapter rules from the portable-skills concept linked rather than restated
+   - prompt patterns and persuasion principles, copied from the global skill; adapt the examples to the prompts this repo's agents and LLM calls actually use, if any
    - optionally, an audit of this repo's always-loaded pointers with suggested rewrites
 4. **Keep it small.** `SKILL.md` stays under about 200 lines, with no placeholders.
 5. **Finish.** Show the skill to the user for approval, run `agents sync` so Claude Code gets its copy, and commit it.

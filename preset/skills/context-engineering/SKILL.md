@@ -1,6 +1,6 @@
 ---
 name: context-engineering
-description: Optimizes agent context setup. Use when starting a new session, when agent output quality degrades, when switching between tasks, or when you need to configure rules files and context for a project.
+description: Optimizes agent context setup and diagnoses context degradation. Use when starting a new session, when agent output quality degrades, when switching between tasks, when deciding what a subagent or long prompt should receive, or when you need to configure rules files and context for a project.
 ---
 
 # Context Engineering
@@ -9,7 +9,7 @@ description: Optimizes agent context setup. Use when starting a new session, whe
 
 ## Overview
 
-Feed agents the right information at the right time. Context is the single biggest lever for agent output quality — too little and the agent hallucinates, too much and it loses focus. Context engineering is the practice of deliberately curating what the agent sees, when it sees it, and how it's structured.
+Feed agents the right information at the right time. Context is the single biggest lever for agent output quality — too little and the agent hallucinates, too much and it loses focus. Context engineering is the practice of deliberately curating what the agent sees, when it sees it, and how it's structured: the smallest set of high-signal tokens that gets the outcome. Attention is a finite budget, and every token spends some of it. The components of context, attention mechanics and loading strategies are in [references/fundamentals.md](references/fundamentals.md).
 
 ## When to Use
 
@@ -18,6 +18,7 @@ Feed agents the right information at the right time. Context is the single bigge
 - Switching between different parts of a codebase
 - Setting up a new project for AI-assisted development
 - The agent is not following project conventions
+- Deciding what a subagent receives, or why a long prompt is followed inconsistently
 
 ## The Context Hierarchy
 
@@ -106,7 +107,25 @@ Three ways to pack context for the agent: the **Brain Dump** (a structured block
 
 ## Context Budget Management
 
-The context window is a working desk, not a filing cabinet. Start trimming at 75% capacity, cut failed attempts, verbose tool output and replaced drafts first, protect the task definition, the live error and the current file, compress before dropping, and put task-critical content last. Details in [references/context-budget.md](references/context-budget.md).
+The context window is a working desk, not a filing cabinet. Start trimming at 75% capacity, cut failed attempts, verbose tool output and replaced drafts first, protect the task definition, the live error and the current file, compress before dropping, and put task-critical content last. Mask tool output that has served its purpose, and give independent subtasks their own subagent with a lean handoff. Details in [references/context-budget.md](references/context-budget.md).
+
+## Why Context Degrades
+
+Quality drops well before the window is full, in five recognizable ways:
+
+| Pattern | What happens | Fix |
+|---|---|---|
+| Lost in the middle | Material mid-context is used less reliably than the start and end | Critical rules first, active task last, shrink the middle |
+| Poisoning | An error enters context and later steps build on it | Remove it, or restart with only verified facts |
+| Distraction | Irrelevant material competes for attention; even one distractor hurts | Filter before loading; leave it reachable instead |
+| Confusion | Context from another task shapes the response | One objective per context or subagent |
+| Clash | Valid sources contradict each other | Surface the conflict, set precedence, drop old versions |
+
+Every fix is one of four moves: **write** state outside the window, **select** only what's relevant, **compress** what stays, **isolate** work in its own context. Symptoms and remedies per pattern are in [references/degradation-patterns.md](references/degradation-patterns.md).
+
+## Verifying Multi-Agent Output
+
+When agent output feeds other agents or gets committed, check it with fresh subagents before it compounds: extract and verify factual claims, run a long prompt several times to find the instructions it loses, trace a wrong result back to the agent that introduced it, score which prompt parts are distractors, and run periodic health checks in long sessions. The procedures and thresholds are in [references/verification-workflows.md](references/verification-workflows.md).
 
 ## MCP Integrations
 
@@ -126,6 +145,9 @@ When context conflicts or requirements are incomplete, don't silently pick an in
 
 ## Supporting Files
 
+- [references/fundamentals.md](references/fundamentals.md): read when you need the why: the components of context, attention as a budget, and when to pre-load versus load just in time.
+- [references/degradation-patterns.md](references/degradation-patterns.md): read when output quality drops and you need to name the pattern (lost in the middle, poisoning, distraction, confusion, clash) and its fix.
+- [references/verification-workflows.md](references/verification-workflows.md): read when agent output feeds other agents or gets committed, a long prompt is followed inconsistently, a multi-agent chain produced a wrong result, or a long session needs a health check.
 - [references/rules-files.md](references/rules-files.md): read when creating or reviewing a project rules file (AGENTS.md, CLAUDE.md, copilot-instructions.md and equivalents).
 - [references/context-packing.md](references/context-packing.md): read when assembling context for a session or task, or writing a project map.
 - [references/context-budget.md](references/context-budget.md): read when a session grows long, output quality drops, or you need to decide what to cut, protect or compress.
@@ -142,6 +164,8 @@ When context conflicts or requirements are incomplete, don't silently pick an in
 | Implicit knowledge | Agent doesn't know project-specific rules | Write it down in rules files — if it's not written, it doesn't exist |
 | Silent confusion | Agent guesses when it should ask | Surface ambiguity explicitly using the confusion management patterns above |
 | Context cliff | Waiting until the window is full before managing it — attention fragments and output quality drops abruptly at the limit | Start trimming at 75% capacity; compress rather than cut |
+| Context poisoning | A wrong fact or hallucination stays in context and every later step builds on it | Remove it or restart from verified facts; verify claims before handing them on |
+| Overloaded handoff | A subagent gets the coordinator's whole history and inherits its noise | Hand off the goal, paths, constraints and output format only |
 
 ## Common Rationalizations
 
@@ -158,6 +182,8 @@ When context conflicts or requirements are incomplete, don't silently pick an in
 - Agent invents APIs or imports that don't exist
 - Agent re-implements utilities that already exist in the codebase
 - Agent quality degrades mid-task as the conversation grows — failed attempts, replaced drafts, and verbose tool output are not being trimmed
+- The same wrong fact or error keeps returning after correction
+- Output blends requirements from different tasks, or an instruction is followed in some runs and not others
 - No rules file exists in the project
 - External data files or config treated as trusted instructions without verification
 

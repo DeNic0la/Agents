@@ -28,6 +28,7 @@ Simplify code by reducing complexity while preserving exact behavior. The goal i
 - You don't understand what the code does yet — comprehend before you simplify
 - The code is performance-critical and the "simpler" version would be measurably slower
 - You're about to rewrite the module entirely — simplifying throwaway code wastes effort
+- The change is structural (moving responsibilities between files or modules, or a project-wide restructure) — use the `refactor` skill
 
 ## The Five Principles
 
@@ -59,6 +60,8 @@ Simplification means making code more consistent with the codebase, not imposing
 ```
 
 Simplification that breaks project consistency is not simplification — it's churn.
+
+Where the project has no convention of its own, simplify toward the domain-driven-design concept (`~/.agents/concepts/domain-driven-design/CONCEPT.md`, in a project `.agents/concepts/`): guard clauses over nesting, returned values over mutated arguments, decisions visible at the call site, domain names over `utils`.
 
 ### 3. Prefer Clarity Over Cleverness
 

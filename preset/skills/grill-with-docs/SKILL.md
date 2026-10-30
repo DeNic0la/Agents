@@ -1,6 +1,7 @@
 ---
 name: grill-with-docs
 description: A relentless interview to sharpen a plan or design, which also writes the docs (glossary and ADRs) as it goes.
+license: MIT
 ---
 
 # Grill with docs

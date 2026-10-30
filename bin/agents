@@ -24,14 +24,17 @@ In a project (copies files into the project, meant to be committed):
   remove <item>...   remove items and their copied files
   list               show available items (* = used in this project)
   sync               re-apply this project's items without pulling (e.g. after a repo skill was generated)
+  --dry-run          with setup/add/remove/sync: show what would change, change nothing
 
 Skills you add get a repo version: generated from the skill's recipe, tailored to the project,
-and preferred over the global version. Skills you don't add stay global.
+and preferred over the global version. Global skills (no recipe) are copied as they are.
+Skills you don't add stay global.
 
 Anywhere:
   update             pull the preset repo, refresh your home and the current project
   install            re-install the preset into your home
-  check              validate the preset's skills against the Agent Skills spec
+  check              validate the preset: skill rules, README catalog, routers, file hygiene
+  audit <path>...    list review signals in third-party skills or agents before adding them
 
 Items are named like concepts/progressive-disclosure or skills/my-skill (".md" is optional).
 
@@ -59,6 +62,7 @@ PROJECT_OVERRIDES="$ROOT/.agents/overrides"   # user-owned runtime controls, nev
 # allowed-tools is in the spec, but as a runtime control it's opt-in via overrides.
 SKILL_FIELDS="name description license compatibility metadata"
 RUNTIME_CONTROLS="allowed-tools disallowed-tools context agent model effort"
+DRY_RUN=""   # set by --dry-run: apply() reports instead of writing
 
 require_project() {
   [ "$ROOT" != "$AGENTS_DIR" ] || die "run this inside a project, not the preset repo"
@@ -71,6 +75,16 @@ available() {
       [ "$(basename "$entry")" = "INDEX.md" ] || echo "$kind/$(basename "$entry")"
     done
   done
+}
+
+# A global skill has no recipe: projects get it as it is, not a tailored version.
+is_global_skill() {
+  case "$1" in skills/*) [ ! -f "$SRC/$1/GENERATE.md" ] ;; *) return 1 ;; esac
+}
+
+# An item as the picker and `agents list` show it.
+label() {
+  if is_global_skill "$1"; then echo "$1 (global, copied as is)"; else echo "$1"; fi
 }
 
 selected() {
@@ -113,8 +127,13 @@ targets() {
     skills/*)
       # Repo version: the recipe, plus a Claude Code mirror of the generated
       # .agents/skills/<n>/ (which Codex and Copilot read directly).
+      # A global skill is copied there as it is, then mirrored the same way.
       n="$(basename "$item")"
-      printf 'recipe\t.agents/recipes/skills/%s.md\n' "$n"
+      if is_global_skill "$item"; then
+        printf 'copy\t.agents/skills/%s\n' "$n"
+      else
+        printf 'recipe\t.agents/recipes/skills/%s.md\n' "$n"
+      fi
       printf 'mirror\t.claude/skills/%s\n' "$n" ;;
     agents/*)
       n="$(basename "$item" .md)"
@@ -167,7 +186,15 @@ copy_item() {
   if [ ! -e "$SRC/$item" ]; then echo "missing $item (gone from the preset, local copies kept)"; return; fi
   while IFS=$'\t' read -r mode path; do
     src="$(item_source "$mode" "$item")"
+    # A skill that became global after this project got its recipe: what's in
+    # .agents/skills/ may be the project's own generated version, so leave it.
+    if [ "$mode" = copy ] && is_global_skill "$item" && [ -f "$ROOT/.agents/recipes/skills/${item#skills/}.md" ]; then
+      echo "warning: $item is a global skill now - delete .agents/recipes/skills/${item#skills/}.md (and .agents/skills/${item#skills/}/ if it was generated) to get the global copy" >&2
+      continue
+    fi
     up_to_date "$mode" "$src" "$ROOT/$path" && continue
+    changed=1
+    [ -z "$DRY_RUN" ] || continue
     mkdir -p "$(dirname "$ROOT/$path")"
     rm -rf "${ROOT:?}/$path"
     case "$mode" in
@@ -179,9 +206,11 @@ copy_item() {
           echo "warning: $item body contains ''' - skipped $path" >&2
         fi ;;
     esac
-    changed=1
   done < <(targets "$item")
-  if [ -n "$changed" ]; then echo "copied  $item"; else echo "ok      $item"; fi
+  if [ -z "$changed" ]; then echo "ok      $item"
+  elif [ -n "$DRY_RUN" ]; then echo "would copy $item"
+  else echo "copied  $item"
+  fi
 }
 
 # True if a not-yet-managed item would overwrite something that's already in the project.
@@ -249,6 +278,8 @@ update_instructions() {
   for item in "$@"; do
     case "$item" in
       skills/*)
+        # Global skills are the same everywhere, so precedence doesn't matter.
+        is_global_skill "$item" && continue
         n="$(basename "$item")"
         skills+="- \`$n\`: \`.agents/skills/$n/\` (recipe: \`.agents/recipes/skills/$n.md\`)"$'\n'
         continue ;;
@@ -298,11 +329,12 @@ apply() {
 
   for item in ${old[@]+"${old[@]}"}; do
     in_list "$item" "$@" && continue
+    if [ -n "$DRY_RUN" ]; then echo "would remove $item"; continue; fi
     while IFS=$'\t' read -r mode path; do remove_path "$path"; done < <(targets "$item")
     echo "removed $item"
     case "$item" in
       skills/*)
-        [ ! -d "$ROOT/.agents/skills/${item#skills/}" ] \
+        is_global_skill "$item" || [ ! -d "$ROOT/.agents/skills/${item#skills/}" ] \
           || echo "        kept .agents/skills/${item#skills/}/ (generated, owned by the project) - delete it to fall back to the global version" ;;
     esac
   done
@@ -310,16 +342,25 @@ apply() {
   for item in "$@"; do
     in_list "$item" ${keep[@]+"${keep[@]}"} && continue
     if ! in_list "$item" ${old[@]+"${old[@]}"} && conflict="$(conflicts "$item")"; then
-      echo "skipped $item ($conflict already exists and is not managed by agents)"
+      if [ -n "$DRY_RUN" ]; then echo -n "would skip"; else echo -n "skipped"; fi
+      echo " $item ($conflict already exists and is not managed by agents)"
       continue
     fi
     copy_item "$item"
     keep+=("$item")
+    [ -z "$DRY_RUN" ] || continue
     case "$item" in
       hooks/*) hooks+=("$item") ;;
-      skills/*) [ -f "$ROOT/.agents/skills/${item#skills/}/SKILL.md" ] || pending+=("${item#skills/}") ;;
+      skills/*)
+        is_global_skill "$item" || [ -f "$ROOT/.agents/skills/${item#skills/}/SKILL.md" ] || pending+=("${item#skills/}") ;;
     esac
   done
+
+  if [ -n "$DRY_RUN" ]; then
+    echo
+    echo "Dry run: nothing was changed. The manifest and the AGENTS.md/CLAUDE.md blocks would be updated to match."
+    return
+  fi
 
   if [ ${#keep[@]} -gt 0 ]; then
     mkdir -p "$(dirname "$MANIFEST")"
@@ -334,17 +375,6 @@ apply() {
   local -a sorted=()
   while IFS= read -r item; do [ -n "$item" ] && sorted+=("$item"); done < <(printf '%s\n' ${keep[@]+"${keep[@]}"} | sort -u)
   update_instructions ${sorted[@]+"${sorted[@]}"}
-
-  # The findings inbox belongs to the project: created once, never overwritten or removed.
-  if in_list concepts/findings ${keep[@]+"${keep[@]}"} && [ ! -f "$ROOT/.findings/generic.md" ]; then
-    mkdir -p "$ROOT/.findings"
-    cat > "$ROOT/.findings/generic.md" <<'EOF'
-# Findings
-
-Things noticed while working on something else. Agents append entries here and move on; they read this folder only when asked. See the findings concept for the entry format.
-EOF
-    echo "created .findings/generic.md"
-  fi
 
   if [ ${#pending[@]} -gt 0 ]; then
     echo
@@ -367,13 +397,13 @@ pick() {
   while IFS= read -r item; do cur+=("$item"); done < <(initial)
   [ ${#all[@]} -gt 0 ] || die "the preset has no items yet - add some under $SRC"
   [ -f "$MANIFEST" ] || [ ${#cur[@]} -eq 0 ] || echo "New project: the * items are the preset's defaults."
-  echo "Selected skills get a version tailored to this repo (preferred over the global one); unselected skills stay global."
+  echo "Selected skills get a version tailored to this repo (preferred over the global one), or a plain copy if they're global skills; unselected skills stay global."
   [ -t 0 ] || die "no items given and no terminal to ask - use: agents setup <item>..."
 
   i=1
   for item in "${all[@]}"; do
     mark=" "; in_list "$item" ${cur[@]+"${cur[@]}"} && mark="*"
-    printf '%3d %s %s\n' "$i" "$mark" "$item"
+    printf '%3d %s %s\n' "$i" "$mark" "$(label "$item")"
     i=$((i + 1))
   done
   read -r -p "Select items (e.g. 1 3-5, all, none; Enter keeps the * ones): " answer
@@ -409,10 +439,40 @@ top_keys() {
   ' "$1"
 }
 
-# Validates the preset against the skill rules (concepts/portable-skills).
+# Rows of a Markdown table under "### <title>" ($3 overrides the heading level), one
+# "first cell<TAB>second-to-last cell<TAB>last cell" line each. The header, the separator and bold group rows ("| **Plan** | |") are skipped.
+catalog() {
+  awk -v title="${3:-###} $2" '
+    { sub(/\r$/, "") }
+    /^#+ / { insec = ($0 == title); next }
+    insec && /^\|/ {
+      n = split($0, c, "|")
+      first = c[2]; gsub(/^[ \t]+|[ \t]+$/, "", first)
+      prev = c[n - 2]; gsub(/^[ \t]+|[ \t]+$/, "", prev)
+      last = c[n - 1]; gsub(/^[ \t]+|[ \t]+$/, "", last)
+      if (first == "" || first ~ /^\*\*/ || first ~ /^:?-+:?$/ || ++row == 1) next
+      print first "\t" prev "\t" last
+    }
+  ' "$1"
+}
+
+# Files changed in the preset repo since the last commit: staged, unstaged and untracked.
+# Empty before the first commit, when everything is new anyway.
+changed_files() {
+  git -C "$AGENTS_DIR" rev-parse -q --verify HEAD >/dev/null 2>&1 || return 0
+  { git -C "$AGENTS_DIR" diff -z --name-only HEAD; git -C "$AGENTS_DIR" ls-files -z --others --exclude-standard; } | tr '\0' '\n'
+}
+
+# True if the file contains a NUL byte.
+is_binary() { ! tr -d '\000' < "$1" | cmp -s - "$1"; }
+
+# Validates the preset: the skill rules (concepts/portable-skills), the README catalog,
+# file hygiene, and (as warnings) the change rules from the repo's AGENTS.md.
 cmd_check() {
-  local errors=0 dir n name desc compat key f
+  local errors=0 warnings=0 dir n name desc compat key f by kind want
+  local -a listed=() changed=()
   err() { echo "error: $*"; errors=$((errors + 1)); }
+  warn() { echo "warning: $*"; warnings=$((warnings + 1)); }
   for dir in "$SRC"/skills/*/; do
     dir="${dir%/}"; n="$(basename "$dir")"
     f="$dir/SKILL.md"
@@ -423,12 +483,14 @@ cmd_check() {
       || err "skills/$n: name must be 1-64 lowercase letters, digits and single hyphens"
     [ -n "$desc" ] && [ ${#desc} -le 1024 ] || err "skills/$n: description must be 1-1024 characters"
     [ ${#compat} -le 500 ] || err "skills/$n: compatibility must be at most 500 characters"
-    grep -qF ".agents/skills/$n/SKILL.md" "$f" \
-      || err "skills/$n: SKILL.md must tell agents to prefer the repo version at .agents/skills/$n/SKILL.md"
+    # A tailored skill has a recipe and the "Repo version first" notice; a global skill neither.
     if [ ! -f "$dir/GENERATE.md" ]; then
-      err "skills/$n: missing GENERATE.md (the recipe for a repo-tailored version)"
+      ! grep -qF ".agents/skills/$n/SKILL.md" "$f" \
+        || err "skills/$n: has the 'Repo version first' notice but no GENERATE.md - add the recipe, or drop the notice to make it a global skill"
     elif [ -z "$(frontmatter "$dir/GENERATE.md" description)" ]; then
       err "skills/$n: GENERATE.md needs a description in its frontmatter"
+    elif ! grep -qF ".agents/skills/$n/SKILL.md" "$f"; then
+      err "skills/$n: SKILL.md must tell agents to prefer the repo version at .agents/skills/$n/SKILL.md"
     fi
     while IFS= read -r key; do
       if in_list "$key" $RUNTIME_CONTROLS; then
@@ -454,8 +516,119 @@ cmd_check() {
       in_list "$key" $RUNTIME_CONTROLS && err "commands/$(basename "$f"): '$key' is a runtime control - keep it out of the shared command"
     done < <(top_keys "$f")
   done
+
+  # The README catalog lists every skill and subagent, and nothing that's gone.
+  while IFS=$'\t' read -r n by kind; do
+    listed+=("skills/$n")
+    if [ ! -d "$SRC/skills/$n" ]; then err "README.md: skill '$n' is listed but isn't in preset/skills"; continue; fi
+    want=agent
+    grep -qE '^disable-model-invocation:[[:space:]]*true' "$SRC/skills/$n/agents/claude.yaml" 2>/dev/null && want=user
+    [ "$by" = "$want" ] || err "README.md: skill '$n' is invoked by $want, but the table says '$by'"
+    want=tailored
+    is_global_skill "skills/$n" && want=global
+    [ "$kind" = "$want" ] || err "README.md: skill '$n' is $want, but the table says '$kind'"
+  done < <(catalog "$AGENTS_DIR/README.md" "Skills in the preset")
+  while IFS=$'\t' read -r n by kind; do
+    listed+=("agents/$n")
+    [ -f "$SRC/agents/$n.md" ] || err "README.md: subagent '$n' is listed but isn't in preset/agents"
+  done < <(catalog "$AGENTS_DIR/README.md" "Subagents in the preset")
+  for dir in "$SRC"/skills/*/; do
+    n="$(basename "$dir")"
+    in_list "skills/$n" ${listed[@]+"${listed[@]}"} || err "README.md: skill '$n' is missing from the 'Skills in the preset' table"
+  done
+  for f in "$SRC"/agents/*.md; do
+    n="$(basename "$f" .md)"
+    in_list "agents/$n" ${listed[@]+"${listed[@]}"} || err "README.md: subagent '$n' is missing from the 'Subagents in the preset' table"
+  done
+
+  # Routers (metadata router: "true") list every other skill exactly once, each as it's invoked.
+  local -a routed=()
+  for f in "$SRC"/skills/*/SKILL.md; do
+    grep -qE '^[[:space:]]+router:[[:space:]]*"?true"?' "$f" || continue
+    name="$(basename "$(dirname "$f")")"
+    while IFS=$'\t' read -r n desc by; do
+      if [ ! -d "$SRC/skills/$n" ]; then err "skills/$name: routes to '$n', which isn't in preset/skills"; continue; fi
+      in_list "$n" ${routed[@]+"${routed[@]}"} && err "skills/$name: '$n' is in more than one router"
+      routed+=("$n")
+      want=agent
+      grep -qE '^disable-model-invocation:[[:space:]]*true' "$SRC/skills/$n/agents/claude.yaml" 2>/dev/null && want=user
+      [ "$by" = "$want" ] || err "skills/$name: '$n' is invoked by $want, but the router says '$by'"
+    done < <(catalog "$f" "Skills" "##")
+  done
+  if [ ${#routed[@]} -gt 0 ]; then
+    for dir in "$SRC"/skills/*/; do
+      n="$(basename "$dir")"
+      grep -qE '^[[:space:]]+router:[[:space:]]*"?true"?' "$dir/SKILL.md" 2>/dev/null && continue
+      in_list "$n" "${routed[@]}" || err "skills/$n: not in any router - add it to the router for its area"
+    done
+  fi
+
+  # Plain text files only: links don't survive a Windows checkout, and agents can't read binaries.
+  while IFS= read -r f; do
+    if [ -L "$f" ]; then err "${f#"$AGENTS_DIR"/}: symbolic links aren't allowed - commit the file itself"
+    elif [ -n "$(find "$f" -size +1024k)" ]; then err "${f#"$AGENTS_DIR"/}: larger than 1 MB"
+    elif is_binary "$f"; then err "${f#"$AGENTS_DIR"/}: binary file - the preset holds text only"
+    fi
+  done < <(find "$SRC" "$AGENTS_DIR/tools" \( -type f -o -type l \))
+
+  # Change rules from this repo's AGENTS.md. Only a person can judge them, so they warn.
+  while IFS= read -r f; do [ -n "$f" ] && changed+=("$f"); done < <(changed_files)
+  if [ ${#changed[@]} -gt 0 ]; then
+    if in_list lib/common.sh "${changed[@]}" && ! in_list install.ps1 "${changed[@]}"; then
+      warn "lib/common.sh changed but install.ps1 didn't - keep global_mappings and Get-Mappings in sync"
+    elif in_list install.ps1 "${changed[@]}" && ! in_list lib/common.sh "${changed[@]}"; then
+      warn "install.ps1 changed but lib/common.sh didn't - keep Get-Mappings and global_mappings in sync"
+    fi
+    for f in bin/agents install.sh install.ps1 lib/common.sh; do
+      in_list "$f" "${changed[@]}" || continue
+      in_list README.md "${changed[@]}" || warn "$f changed but README.md didn't - update it if behavior changed"
+      in_list REQUIREMENTS.md "${changed[@]}" || warn "$f changed but REQUIREMENTS.md didn't - update it if behavior changed"
+      break
+    done
+  fi
+
+  [ "$warnings" -eq 0 ] || echo "$warnings warning(s)"
   if [ "$errors" -gt 0 ]; then echo "$errors problem(s) found"; return 1; fi
   echo "ok - preset follows the skill rules"
+}
+
+# Review signals for agent content from elsewhere (static: nothing is run).
+# One "category<TAB>extended regex" per line, matched case-insensitively.
+AUDIT_PATTERNS='external-install	\b(git clone|npm (install|i)|npx|pip3? install|brew install|apt(-get)? install|winget install|choco install|plugin marketplace add)\b
+network	\b(curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\b|fetch\(|https?://
+credential	\b(api[_ -]?key|access[_ -]?token|secret|password|private[_ -]?key|wallet|seed phrase)\b
+filesystem-write	\b(cp|mv|rm|chmod|chown|mkdir|git reset|Set-Content|Add-Content|Remove-Item)\b
+privileged	\b(sudo|runas|administrator|systemctl|launchctl)\b
+destructive	\b(rm -rf|git reset --hard|git push (-f|--force)|drop (database|table)|format [a-z]:)
+permission-bypass	dangerously|bypass ?permissions|skip-permissions|--yolo|\ballowed-tools\b
+hidden-instruction	ignore (all |any )?(previous|prior|above) instructions|(do not|don.t|never) (tell|inform|show) the user|without (telling|informing|asking) the user'
+
+cmd_audit() {
+  [ $# -gt 0 ] || die "usage: agents audit <path>..."
+  local path f cat re hit total=0 files=0 found
+  for path in "$@"; do [ -e "$path" ] || die "no such file or folder: $path"; done
+  echo "Static audit: nothing is run. Review every signal before adding this content to the preset."
+  for path in "$@"; do
+    while IFS= read -r f; do
+      found=0
+      if [ -L "$f" ]; then echo "  [symlink] $f -> $(readlink "$f")"; found=1
+      elif [ -n "$(find "$f" -size +1024k)" ]; then echo "  [large-unread-file] $f"; found=1
+      elif is_binary "$f"; then echo "  [binary-file] $f"; found=1
+      else
+        while IFS=$'\t' read -r cat re; do
+          while IFS= read -r hit; do
+            echo "  [$cat] $f:${hit%%:*}"
+            echo "      $(printf '%s' "${hit#*:}" | sed 's/^[[:space:]]*//' | tr -d '\r' | cut -c1-200)"
+            found=$((found + 1))
+          done < <(grep -nEi -- "$re" "$f" || true)
+        done <<< "$AUDIT_PATTERNS"
+      fi
+      total=$((total + found))
+      [ "$found" -eq 0 ] || files=$((files + 1))
+    done < <(find "$path" \( -type f -o -type l \) | sort)
+  done
+  echo
+  echo "$total signal(s) in $files file(s). A static scan is not a guarantee of safety: also review every external source the content points to."
 }
 
 global_install() {
@@ -516,7 +689,7 @@ cmd_list() {
   while IFS= read -r item; do cur+=("$item"); done < <(selected)
   while IFS= read -r item; do
     mark=" "; in_list "$item" ${cur[@]+"${cur[@]}"} && mark="*"
-    echo "$mark $item"
+    echo "$mark $(label "$item")"
   done < <(available)
 }
 
@@ -541,6 +714,12 @@ cmd_update() {
 cmd="${1:-}"
 [ $# -gt 0 ] && shift
 case "$cmd" in
+  setup|add|remove|sync)
+    args=()
+    for a in "$@"; do if [ "$a" = "--dry-run" ]; then DRY_RUN=1; else args+=("$a"); fi; done
+    set -- ${args[@]+"${args[@]}"} ;;
+esac
+case "$cmd" in
   setup)   cmd_setup "$@" ;;
   add)     cmd_add "$@" ;;
   remove)  cmd_remove "$@" ;;
@@ -549,6 +728,7 @@ case "$cmd" in
   update)  cmd_update "$@" ;;
   install) global_install ;;
   check)   cmd_check ;;
+  audit)   cmd_audit "$@" ;;
   -h|--help|help|"") usage ;;
   *) usage >&2; exit 1 ;;
 esac
