@@ -4,7 +4,8 @@
 // - A workflow, or a subagent on a top-tier model, while weekly usage is ahead of pace: ask.
 // - A model switch on a context above USAGE_SWITCH_ASK_TOKENS (default 100000): ask, because
 //   the new model starts with an empty cache and writes the whole context again.
-// The weekly reading comes from <config dir>/usage-pace.json, saved by statusline/usage-pace.js.
+// The weekly reading comes from <config dir>/usage-pace.json, saved by statusline/usage-pace.js;
+// the pace line is weighted by its weekday weights (statusline/weekly-pace.js).
 'use strict';
 const fs = require('fs'), os = require('os'), path = require('path');
 
@@ -19,9 +20,19 @@ function weekly(now) {
     const s = JSON.parse(fs.readFileSync(path.join(configDir, 'usage-pace.json'), 'utf8'));
     const w = s.seven_day;
     if (!w || now - s.updated_at > 6 * 3600 || w.resets_at < now) return null; // stale
-    const pace = Math.round(Math.min(1, Math.max(0, 1 - (w.resets_at - now) / WEEK)) * (100 - reserve));
-    return { used: w.used, pace, resetsAt: w.resets_at };
+    return { used: w.used, pace: pace(w, now), resetsAt: w.resets_at };
   } catch { return null; }
+}
+
+// The same weighted pace line as the status line; the linear one if that fails.
+function pace(w, now) {
+  try {
+    const { paceLine, parseWeekdays } = require('../statusline/weekly-pace.js');
+    const ok = Array.isArray(w.weights) && w.weights.length === 7 && w.weights.every(x => Number.isFinite(x) && x >= 0) && w.weights.some(x => x > 0);
+    const p = paceLine(now, w.resets_at, ok ? w.weights : parseWeekdays(process.env.USAGE_PACE_WEEKDAYS), reserve);
+    if (Number.isFinite(p)) return p;
+  } catch {}
+  return Math.round(Math.min(1, Math.max(0, 1 - (w.resets_at - now) / WEEK)) * (100 - reserve));
 }
 
 // The model a subagent will run on: the call's, else its definition's, else the env default.

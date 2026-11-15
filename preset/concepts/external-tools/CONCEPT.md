@@ -9,6 +9,8 @@ Applies to every agent, in any tool, working anywhere. In this concept a **tool*
 
 This folder is the list of tools I want agents to have. Each tool has one file next to this one, with what it's for, how to install and check it, how to run it, and its limits.
 
+Security scanners aren't listed here. They live in the security-scanning concept, which also covers recommending and adding one.
+
 ## The list
 
 | Tool | Use when | File |

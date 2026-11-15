@@ -1,20 +1,26 @@
 #!/usr/bin/env node
 // Claude Code status line for the usage-budget concept:
-//   model · context · 5-hour usage · weekly usage and pace line · what to do about it
-// The advice says whether to use more or less from now on, how much per day, and the factor
-// against your rate so far, e.g. "▲ use more ~19%/day (3.1×)" or "▼ ease off ~8%/day (0.6×)".
-// It records every change in weekly usage to <config dir>/usage-history.jsonl and, once a full
-// week is recorded, spreads the remaining budget over the weekdays you actually use Claude.
-// The last reading goes to <config dir>/usage-pace.json for hooks and skills.
+//   model · context · 5-hour usage · weekly usage and pace line · what to do about it · reset time
+// The pace line expects usage on weekdays: each day counts by its weight (see weekly-pace.js),
+// so it climbs fast Monday to Friday and slowly at the weekend. The advice says whether to use
+// more or less from now on, how much per workday, and the factor against your rate so far, e.g.
+// "▲ use more ~19%/workday (3.1×)"; on a light day (weight below 0.5) it adds what today's share is.
+// It records every change in weekly usage to <config dir>/usage-history.jsonl and learns the
+// weekday weights from the amounts used in finished weeks that the history covers end to end.
+// The last reading, the pace and the weights go to <config dir>/usage-pace.json for hooks and skills.
 // USAGE_PACE_RESERVE: percent of the weekly limit to keep for the last day (default 10).
+// USAGE_PACE_WEEKDAYS: the prior weekday weights, Monday first (default 1,1,1,1,1,0.2,0.2).
+// USAGE_PACE_COMPACT=1: shorter labels, e.g. "wk 23/30% ▲~19%/wd (today 4%) · →Fri 14:00".
 'use strict';
 const fs = require('fs'), os = require('os'), path = require('path');
+const { DAY, WEEK, parseWeekdays, weekdayWeights, paceLine, advise } = require('./weekly-pace.js');
 
-const DAY = 86400, WEEK = 7 * DAY;
 const configDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 const historyFile = path.join(configDir, 'usage-history.jsonl');
 const clamp = (x, lo, hi) => (Number.isFinite(x) ? Math.min(hi, Math.max(lo, x)) : lo);
 const reserve = clamp(Number(process.env.USAGE_PACE_RESERVE || 10), 0, 50);
+const prior = parseWeekdays(process.env.USAGE_PACE_WEEKDAYS);
+const compact = process.env.USAGE_PACE_COMPACT === '1';
 const paint = (code, s) => `\x1b[${code}m${s}\x1b[0m`;
 const k = n => (n >= 1000 ? Math.round(n / 1000) + 'k' : String(n));
 const num = x => (x >= 10 ? String(Math.round(x)) : String(Math.round(x * 10) / 10));
@@ -63,48 +69,24 @@ function record(hist, entry) {
   return hist;
 }
 
-// For each local weekday, the share of finished weeks in which usage rose on that day (at least
-// 0.15, so no day is assumed off for good). Null until a whole week has been recorded.
-function weekdayWeights(hist, now) {
-  const done = new Set(hist.filter(h => h.resets_at <= now && h.t >= h.resets_at - WEEK).map(h => h.resets_at));
-  if (!done.size) return null;
-  const active = new Set();
-  for (let i = 1; i < hist.length; i++) {
-    const a = hist[i - 1], b = hist[i];
-    if (b.resets_at === a.resets_at && done.has(b.resets_at) && b.used > a.used) active.add(b.resets_at + ':' + new Date(b.t * 1000).getDay());
+// ---- rendering ----------------------------------------------------------------------------
+function adviceText(a, weights) {
+  const flat = weights.every(w => w === 1);
+  const unit = compact ? (flat ? '%/d' : '%/wd') : (flat ? '%/day' : '%/workday');
+  const amount = `~${num(a.perDay)}${unit}`;
+  const light = !a.light ? '' : compact ? ` (today ${num(a.today)}%)` : `, light day: ~${num(a.today)}% today`;
+  if (a.kind === 'stop') return paint(31, compact ? '▼stop' : `▼ stop: only the ${reserve}% reserve is left`);
+  if (compact) {
+    const arrow = a.kind === 'more' || a.kind === 'free' ? '▲' : a.kind === 'ease' ? '▼' : '●';
+    const code = arrow === '▲' ? 32 : arrow === '▼' ? (a.factor < 0.6 ? 31 : 33) : 0;
+    return (code ? paint(code, arrow + amount) : arrow + amount) + light;
   }
-  const w = [0, 0, 0, 0, 0, 0, 0];
-  for (const key of active) w[Number(key.split(':')[1])]++;
-  return w.map(c => Math.max(0.15, c / done.size));
-}
-
-// Days between two times, each day weighted by how likely you are to use Claude on it.
-function activeDays(from, to, weights) {
-  let total = 0;
-  for (let t = from; t < to;) {
-    const d = new Date(t * 1000);
-    const end = Math.min(to, new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime() / 1000);
-    total += ((end - t) / DAY) * (weights ? weights[d.getDay()] : 1);
-    t = end;
-  }
-  return total;
-}
-
-// ---- advice -------------------------------------------------------------------------------
-function advice(used, pace, resets, now, weights) {
-  const left = 100 - reserve - used;
-  if (left <= 0) return paint(31, `▼ stop: only the ${reserve}% reserve is left`);
-  const unit = weights ? '%/workday' : '%/day';
-  const perDay = left / Math.max(0.25, activeDays(now, resets, weights));
-  const elapsed = activeDays(resets - WEEK, now, weights);
-  // Too early in the window for a rate: compare with one day's share of the week instead.
-  const dayShare = (100 - reserve) / Math.max(1, activeDays(resets - WEEK, resets, weights));
-  if (elapsed < 1 || used < 1) return used <= Math.max(pace, dayShare) ? paint(32, `▲ ~${num(perDay)}${unit} free`) : paint(33, `▼ ease off ~${num(perDay)}${unit}`);
-  const x = perDay / (used / elapsed); // the daily budget against your daily rate so far
-  const change = x >= 2 ? `${num(x)}×` : x >= 1 ? `+${Math.round((x - 1) * 100)}%` : `−${Math.round((1 - x) * 100)}%`;
-  if (x >= 1.15) return paint(32, `▲ use more ~${num(perDay)}${unit} (${change})`);
-  if (x <= 0.87) return paint(x < 0.6 ? 31 : 33, `▼ ease off ~${num(perDay)}${unit} (${change})`);
-  return `● on pace ~${num(perDay)}${unit}`;
+  const change = a.factor == null ? '' : a.factor >= 2 ? ` (${num(a.factor)}×)`
+    : a.factor >= 1 ? ` (+${Math.round((a.factor - 1) * 100)}%)` : ` (−${Math.round((1 - a.factor) * 100)}%)`;
+  if (a.kind === 'free') return paint(32, `▲ ${amount} free`) + light;
+  if (a.kind === 'more') return paint(32, `▲ use more ${amount}${change}`) + light;
+  if (a.kind === 'ease') return paint(a.factor < 0.6 ? 31 : 33, `▼ ease off ${amount}${change}`) + light;
+  return `● on pace ${amount}` + light;
 }
 
 function render(input) {
@@ -126,12 +108,15 @@ function render(input) {
   const resets = week && seconds(week.resets_at);
   if (week && resets) {
     const used = Math.round(week.used_percentage);
-    const pace = Math.round(clamp(1 - (resets - now) / WEEK, 0, 1) * (100 - reserve));
     const hist = record(readHistory(), { t: Math.round(now), used, resets_at: Math.round(resets) });
-    const label = `week ${used}%/pace ${pace}%`;
-    parts.push((used > pace + 10 ? paint(31, label) : used > pace ? paint(33, label) : label) + ' ' + advice(used, pace, resets, now, weekdayWeights(hist, now)));
-    if (resets - now < 1.5 * DAY) parts.push(`resets ${clock(resets)}`);
-    const state = { updated_at: Math.round(now), reserve, seven_day: { used, resets_at: Math.round(resets) } };
+    const { weights, weeks } = weekdayWeights(hist, now, prior);
+    const pace = paceLine(now, resets, weights, reserve);
+    const label = compact ? `wk ${used}/${pace}%` : `week ${used}%/pace ${pace}%`;
+    const a = advise({ used, pace, now, resetsAt: resets, weights, reserve });
+    parts.push((used > pace + 10 ? paint(31, label) : used > pace ? paint(33, label) : label) + ' ' + adviceText(a, weights));
+    parts.push(compact ? `→${clock(resets)}` : `resets ${clock(resets)}`);
+    const state = { updated_at: Math.round(now), reserve,
+      seven_day: { used, resets_at: Math.round(resets), pace, weights: weights.map(w => Math.round(w * 1000) / 1000), learned_weeks: weeks } };
     if (five) state.five_hour = { used: Math.round(five.used_percentage), resets_at: seconds(five.resets_at) };
     try { fs.writeFileSync(path.join(configDir, 'usage-pace.json'), JSON.stringify(state)); } catch {}
   }

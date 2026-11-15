@@ -55,6 +55,10 @@ When you read an issue from the project's issue tracker (Jira, GitLab, ...) or w
 
 `~/.agents/concepts/external-tools/CONCEPT.md` lists the external programs I want you to have, such as `maigret` for username lookups and Pulse Diagnostics for Windows crashes. When a task matches one, use it instead of scripting the job yourself: check it's installed, and if not, install it the way its file says after my yes. When you notice repeated manual work that an established, maintained tool would do better, recommend it to me (what, why, how it installs) instead of installing it.
 
+## Security scans
+
+For any security scan (dependencies, secrets, images, IaC), follow `~/.agents/concepts/security-scanning/CONCEPT.md`.
+
 ## Incidents
 
 When production is down or degraded, or you write or read anything about an incident, follow `~/.agents/concepts/incident-management/CONCEPT.md`:

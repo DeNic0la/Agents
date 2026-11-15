@@ -1,11 +1,44 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "env": {
+    "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet"
+  },
   "permissions": {
     "defaultMode": "auto"
   },
-  "model": "opus[1m]",
+  "model": "opus",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Agent|Task|Workflow",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/usage-guard.js\"",
+            "onFailure": "continue"
+          }
+        ]
+      }
+    ],
+    "PreModelSwitch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/usage-guard.js\"",
+            "onFailure": "continue"
+          }
+        ]
+      }
+    ]
+  },
   "worktree": {
     "baseRef": "fresh"
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "node \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/statusline/usage-pace.js\"",
+    "padding": 0
   },
   "enabledPlugins": {
     "engineering@synced": false,
@@ -24,6 +57,8 @@
       "effortLevel": "high"
     }
   },
+  "autoCompactWindow": 200000,
+  "advisorModel": "fable",
   "askUserQuestionTimeout": "60s",
   "autoUpdatesChannel": "latest",
   "skipDangerousModePermissionPrompt": true,
@@ -35,32 +70,6 @@
     "allow": [
       "$defaults",
       "*"
-    ]
-  },
-  "autoCompactWindow": 200000,
-  "env": {
-    "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet"
-  },
-  "statusLine": {
-    "type": "command",
-    "command": "node \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/statusline/usage-pace.js\"",
-    "padding": 0
-  },
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Agent|Task|Workflow",
-        "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/usage-guard.js\"", "onFailure": "continue" }
-        ]
-      }
-    ],
-    "PreModelSwitch": [
-      {
-        "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/usage-guard.js\"", "onFailure": "continue" }
-        ]
-      }
     ]
   }
 }

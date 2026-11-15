@@ -22,6 +22,7 @@ If nothing here fits, name the router that does: `think`, `design`, `planning`, 
 ## Choosing
 
 - Does it work for its user: `qa`. Is the code right: `code-review`. Then apply what either found: `fix-findings`.
+- Vulnerable dependencies, leaked secrets, image or IaC issues: `security-scan`.
 - Just commit: `commit`. Just the PR description: `pr`. All the way to a verified merge: `ship-pr`. A merge or rebase stopped on conflicts: `resolving-merge-conflicts`.
 - A release coming up: `deploy-checklist`. Production is broken: `incident-response`. Telling the team what happened: `standup`.
 
@@ -32,6 +33,7 @@ If nothing here fits, name the router that does: `think`, `design`, `planning`, 
 | qa | run the changed program the way its user would and check each requested behavior | agent |
 | code-review | review the changes since a fixed point against an optional spec, ending on a coded verdict | agent |
 | fix-findings | apply the findings of the most recent review, audit or check in this session | user |
+| security-scan | scan for vulnerable dependencies, leaked secrets and image or IaC issues, then triage and propose fixes | user |
 | commit | commit every change on the current branch with a Conventional Commit message, after a secrets scan | user |
 | pr | write a fast-to-review PR body: summary diagram, before/after evidence, merge danger | agent |
 | ship-pr | commit, push, open a PR, repair CI within a fixed budget, squash merge and verify post-merge workflows | user |

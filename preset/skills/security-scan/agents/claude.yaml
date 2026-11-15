@@ -1,0 +1,2 @@
+disable-model-invocation: true
+argument-hint: "[path, image, or scope: deps | secrets | images | iac | history]"
