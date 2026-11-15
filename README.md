@@ -182,7 +182,7 @@ Kind is `tailored` (projects generate their own version) or `global` (projects g
 | incident-response | triage an incident, post status updates, mitigate, and write a blameless postmortem | agent | tailored |
 | standup | turn recent commits, PRs, tickets or notes into a yesterday / today / blockers update | agent | global |
 | **Agent setup** | | | |
-| agent-setup | pick the skill for improving the agent itself: its skills, instructions, context and prompts (router) | user | global |
+| agent-setup | pick the skill for improving the agent itself: its skills, instructions, context, prompts and usage (router) | user | global |
 | writing-for-agents | write or restructure a skill, AGENTS.md or any doc an agent reads | agent | tailored |
 | writing-skills | prove a skill changes agent behavior: baselines, pressure tests, closing loopholes | agent | tailored |
 | skill-review | sweep a skill collection for stale steps, missing gotchas, gaps and duplicates | agent | global |
@@ -192,6 +192,7 @@ Kind is `tailored` (projects generate their own version) or `global` (projects g
 | retro | review a session and improve the agent's environment | user | tailored |
 | diagnosing-sessions | find out, with transcript evidence, why a session went wrong, and report it to whoever maintains the skill or plugin involved | user | tailored |
 | optimize-prompt | rewrite a draft prompt for an AI chat into a clearer one, without running it | agent | global |
+| budget-run | size a multi-agent or long run to fit the usage budget, and ask first when it's large or weekly usage is ahead of pace | agent | global |
 | **Data** (global) | | | |
 | data | pick the skill for a data question, from one query to a shared dashboard (router) | user | global |
 | analyze | answer a business question with data, from a quick number to a formal report | agent | global |
@@ -227,13 +228,18 @@ Kind is `tailored` (projects generate their own version) or `global` (projects g
 
 `implement-spec` and `orchestrate` share [parallel-resources.md](preset/references/parallel-resources.md); in a project, add it along with them.
 
-Claude Code also gets `claude-handoff` (from `tools/claude/`), which starts a background `claude` session from a handoff.
+Claude Code also gets these from `tools/claude/`:
+- `claude-handoff`, which starts a background `claude` session from a handoff.
+- `usage-review`, which reports where usage went, from this machine's transcripts.
+- `settings.json` with usage defaults: subagents without a tier run on Sonnet, and compaction starts at 200k tokens. It also registers a status line that shows weekly usage against the pace line, and a hook that asks before a workflow or a top-tier subagent while usage is ahead of pace, and before a model switch on a large context. The scripts need Node.js; [levers.md](preset/concepts/usage-budget/levers.md) has the details. The installer links this file as `~/.claude/settings.json`, so keep your own Claude Code settings in it.
 
 ### Subagents in the preset
 
 The spec-driven skills dispatch the first group of personas. Their shared contract is in three references: [specs-workflow.md](preset/references/specs-workflow.md) (the `.specs/` layout and file formats), [model-tiers.md](preset/references/model-tiers.md) (picking `fast`, `standard` or `deep` per dispatch) and [judged-iteration.md](preset/references/judged-iteration.md) (scoring, retrying and accepting work). In a project, add those references along with the skills.
 
 The second group are specialists you or a skill can dispatch directly. They follow the domain-driven-design concept and use the preset's skills for details (for example `api-and-interface-design`, `observability-and-instrumentation`, `performance-optimization`). `backend-architect` also checks its design against [ddd-deliverables.md](preset/references/ddd-deliverables.md).
+
+Each subagent sets a default model tier in `model`, picked with [model-tiers.md](preset/references/model-tiers.md): `haiku` for read-only work (code-explorer, researcher, tech-writer), `opus` for backend-security-coder, and `sonnet` for the rest. A dispatch can pass another. Copilot falls back to the session's model when it can't use the name, and the generated Codex agents leave it out.
 
 | Subagent | Writes |
 |---|---|
@@ -271,6 +277,7 @@ The global instructions tell every tool to read [the index](preset/concepts/INDE
 | [incident-management](preset/concepts/incident-management/CONCEPT.md) | One contract for every skill that raises, handles or learns from incidents. It sets a SEV1-4 scale, maps page alerts, P1 tickets and fired rollback triggers onto it, and fixes the status vocabulary (Investigating → Identified → Monitoring → Resolved). Mitigation comes before the root cause, and every production change, page or customer message needs the user's go-ahead. Timelines are in UTC and blameless. Each incident gets one record (by default in `docs/incidents/`), whose ID links the fix, its regression test, the action items and the runbook updates. Follow-up work goes through the agent-lifecycle. A default, and the global instructions apply it everywhere. |
 | [domain-driven-design](preset/concepts/domain-driven-design/CONCEPT.md) | Rules for the code agents write: layered architecture with a pure functional core, decisions and side effects visible at the call site, data through return values, early returns, domain names instead of `utils`, typed error handling, library before custom code. The project's own conventions win. A default, and the global instructions apply it everywhere. |
 | [external-tools](preset/concepts/external-tools/CONCEPT.md) | The external programs I want agents to have, one file per tool with its use, install, check, flags and limits: [maigret](preset/concepts/external-tools/maigret.md) (username OSINT) and [Pulse Diagnostics](preset/concepts/external-tools/pulse-diagnostics.md) (Windows crashes, through its exported reports). Agents use a listed tool instead of scripting the job by hand, check it's installed, and install it in user space and isolated (`uv tool`, `pipx`, ...) only after the user's yes; admin rights need a separate yes. They watch for repeated manual work and recommend a maintained, open-source tool for it without installing it; on a yes it's added to the list. The global instructions apply it everywhere; it isn't a project default. |
+| [usage-budget](preset/concepts/usage-budget/CONCEPT.md) | Plan usage is a weekly budget, and some of it should be left on the last day. Agents pace against a line that keeps a 10% reserve, give every dispatched agent an explicit model tier, use scripts for deterministic work, keep one task per session and don't switch models on a large context. Before running several agents or a workflow they follow `budget-run`, and ask first when the run is large or usage is ahead of pace. [levers.md](preset/concepts/usage-budget/levers.md) maps each cost driver to the settings and hooks of Claude Code, Codex and Copilot. The global instructions apply it everywhere; it isn't a project default. |
 
 To add a concept, create `preset/concepts/<name>/CONCEPT.md` with `name` and `description` frontmatter, then add a row to `INDEX.md`.
 
@@ -281,7 +288,7 @@ Run `agents check` before committing. It fails on:
 - a skill or subagent missing from the tables above, a row for one that no longer exists, an "Invoked by" cell that doesn't match the skill's adapters, or a Kind cell that doesn't match whether the skill has a `GENERATE.md`
 - a symbolic link, a binary file or a file over 1 MB under `preset/` or `tools/`
 
-It also warns, without failing, when the uncommitted changes break a rule from this repo's `AGENTS.md`: `lib/common.sh` changed without `install.ps1` (or the reverse), or the installers or `bin/agents` changed without README.md and REQUIREMENTS.md.
+It also warns, without failing, when the uncommitted changes break a rule from this repo's `AGENTS.md`: `lib/common.sh` changed without `install.ps1` (or the reverse), or the installers or `bin/agents` changed without README.md and REQUIREMENTS.md. It also warns when a subagent has no `model`, and notes how many characters of names and descriptions the agent-invoked skills put into every session's skill listing.
 
 After changing the installers, `lib/common.sh` or `bin/agents`, run the smoke tests on every platform you can reach. They work on a copy of the repo with temporary home folders, so your own setup isn't touched:
 

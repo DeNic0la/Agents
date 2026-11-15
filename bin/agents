@@ -608,6 +608,29 @@ cmd_check() {
     done
   fi
 
+  # Usage budget (concepts/usage-budget): subagents carry a default model tier, and the skills
+  # the agent may start itself take listing space in every session.
+  local -a agent_files=("$SRC"/agents/*.md)
+  if [ ${#agent_files[@]} -gt 0 ]; then
+    while IFS= read -r n; do
+      warn "agents/$n.md: no model - set the tier it runs at by default (references/model-tiers.md), or it runs on the session's model"
+    done < <(awk '
+      { sub(/\r$/, "") }
+      FNR == 1 { if (file != "" && !model) print file; file = FILENAME; sub(/.*\//, "", file); sub(/\.md$/, "", file); model = 0; infm = ($0 == "---"); next }
+      infm && $0 == "---" { infm = 0; next }
+      infm && /^model:[ \t]*[^ \t]/ { model = 1 }
+      END { if (file != "" && !model) print file }
+    ' "${agent_files[@]}")
+  fi
+  local listing=0 listing_count=0
+  for dir in "$SRC"/skills/*/; do
+    n="${dir%/}"; n="${n##*/}"
+    [ -z "${fact[$n/user-claude]-}" ] || continue
+    desc="${fact[$n/description]-}"
+    listing=$((listing + ${#n} + ${#desc})); listing_count=$((listing_count + 1))
+  done
+  echo "note: $listing_count agent-invoked skills put $listing characters of names and descriptions into every session (Claude Code's listing budget is 1% of the context window, Codex's 2%)"
+
   # Plain text files only: links don't survive a Windows checkout, and agents can't read binaries.
   # One search per rule, not per file, so it stays fast in Git Bash.
   while IFS= read -r f; do

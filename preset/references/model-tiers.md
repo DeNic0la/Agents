@@ -4,6 +4,8 @@ How orchestrating skills pick a model for each dispatched agent. Choosing the ti
 
 Tokens are the budget. Every dispatch spends them, and a higher tier multiplies the cost of every turn it runs. Pick the cheapest tier that can do the unit, and let escalation catch the rare miss.
 
+Never dispatch without a tier. An agent without one runs on the session's model, usually the most expensive one in use. Subagent definitions carry a default tier in `model`; pass a different one when the unit needs it.
+
 ## Tiers
 
 Tiers are capability classes, not product names; map each to the closest model you have.

@@ -1,6 +1,6 @@
 ---
 name: agent-setup
-description: Pick the skill for improving the agent itself: its skills, instructions, context and prompts.
+description: Pick the skill for improving the agent itself: its skills, instructions, context, prompts and usage.
 license: MIT
 metadata:
   router: "true"
@@ -25,6 +25,7 @@ If nothing here fits, name the router that does: `think`, `design`, `planning`, 
 - Instruction files out of date with the code: `agents-md-improver`. The user stated a lasting preference: `task-observer`. What the agent loads and when: `context-engineering`.
 - A session to learn from: `retro` improves the environment, `diagnosing-sessions` finds out with evidence why it went wrong and reports it.
 - A prompt for an AI chat: `optimize-prompt`.
+- Usage running low, or a run with many agents to size before it starts: `budget-run`.
 
 ## Skills
 
@@ -39,3 +40,4 @@ If nothing here fits, name the router that does: `think`, `design`, `planning`, 
 | retro | review a session and improve the agent's environment | user |
 | diagnosing-sessions | find out, with transcript evidence, why a session went wrong, and report it to whoever maintains the skill or plugin involved | user |
 | optimize-prompt | rewrite a draft prompt for an AI chat into a clearer one, without running it | agent |
+| budget-run | size a multi-agent or long run to fit the usage budget, and ask first when it's large or weekly usage is ahead of pace | agent |

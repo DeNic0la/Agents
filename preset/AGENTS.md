@@ -17,6 +17,14 @@ Every task follows `~/.agents/concepts/agent-lifecycle/CONCEPT.md`:
 
 Open the concept's `states.md` when you enter a state you haven't been in yet this session.
 
+## Usage
+
+My plan usage is a weekly budget, and I want some of it left on the last day. Follow `~/.agents/concepts/usage-budget/CONCEPT.md`:
+- Give every agent you dispatch an explicit model tier (`~/.agents/references/model-tiers.md`). Never let it inherit the session's model.
+- Use a script, not an agent, for anything deterministic.
+- Keep one task per session. Suggest a fresh session over a context past about 200k tokens, and never switch models on a large context.
+- Before running several agents or a workflow, follow the `budget-run` skill, and ask me first when the run is large or my weekly usage is ahead of pace.
+
 ## Skills
 
 If a repository has its own version of a skill in `.agents/skills/<name>/`, always use it instead of the global skill with the same name. It's tailored to that repository.

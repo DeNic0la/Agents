@@ -1,4 +1,66 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
-  "autoUpdatesChannel": "latest"
+  "permissions": {
+    "defaultMode": "auto"
+  },
+  "model": "opus[1m]",
+  "worktree": {
+    "baseRef": "fresh"
+  },
+  "enabledPlugins": {
+    "engineering@synced": false,
+    "cowork-plugin-management@synced": false,
+    "productivity@synced": false,
+    "modern-web-guidance@synced": false,
+    "chrome-extension-builder@synced": false,
+    "10x-Team@synced": false,
+    "desktop-commander@synced": false,
+    "claude-bridge@synced": false,
+    "design@synced": false,
+    "data@synced": false
+  },
+  "modelSettings": {
+    "claude-opus-5-5": {
+      "effortLevel": "high"
+    }
+  },
+  "askUserQuestionTimeout": "60s",
+  "autoUpdatesChannel": "latest",
+  "skipDangerousModePermissionPrompt": true,
+  "skipWorkflowUsageWarning": true,
+  "theme": "dark",
+  "editorMode": "normal",
+  "useAutoModeDuringPlan": true,
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "*"
+    ]
+  },
+  "autoCompactWindow": 200000,
+  "env": {
+    "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet"
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "node \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/statusline/usage-pace.js\"",
+    "padding": 0
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Agent|Task|Workflow",
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/usage-guard.js\"", "onFailure": "continue" }
+        ]
+      }
+    ],
+    "PreModelSwitch": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/usage-guard.js\"", "onFailure": "continue" }
+        ]
+      }
+    ]
+  }
 }
