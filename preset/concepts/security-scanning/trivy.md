@@ -14,7 +14,7 @@ Scans IaC and configuration (Dockerfile, Kubernetes, Terraform, CloudFormation, 
 So:
 
 1. Use an exact version of **0.71.1 or later**, never `latest`. It was 0.76.2 in November 2026.
-2. Verify the release's Sigstore signature before first use (cosign v3; add `--new-bundle-format` on cosign 2.4 or later):
+2. Verify the release's Sigstore signature before first use. The command is for cosign v3; on cosign 2.4 to 2.x, add `--new-bundle-format`.
    ```
    cosign verify-blob trivy_<v>_windows-64bit.zip --bundle trivy_<v>_windows-64bit.zip.sigstore.json \
      --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
@@ -36,7 +36,7 @@ Check: `trivy --version`.
 
 1. The release archive from https://github.com/aquasecurity/trivy/releases/tag/v<v> (`trivy_<v>_windows-64bit.zip`, `trivy_<v>_Linux-64bit.tar.gz`), verified as above, unpacked into a user bin folder.
 2. Container, pinned by digest: `ghcr.io/aquasecurity/trivy` or `aquasec/trivy`.
-3. Windows: `winget install --id AquaSecurity.Trivy -e --version <v>`. Aqua doesn't document this community manifest, so verify the installed binary against the release checksums.
+3. Windows: `winget install --id AquaSecurity.Trivy -e --version <v>`. Aqua doesn't document this community manifest. Before installing, check that `winget show --id AquaSecurity.Trivy --version <v>` names the official release zip as its installer URL, and that its SHA256 matches that zip's line in `trivy_<v>_checksums.txt`, a file whose signature you verified as in step 2 above.
 
 ## Run
 
@@ -52,7 +52,7 @@ Check: `trivy --version`.
   - Pre-load the databases, then pass `--skip-db-update --skip-java-db-update`.
   - `--offline-scan` stops lookups of Java packages on Maven Central.
 
-**Accepted risk:** `.trivyignore` in the scanned folder, one ID per line, with an expiry and a comment:
+**Accepted risk:** `.trivyignore`, read from the folder Trivy runs in (or pass `--ignorefile <path>`), one ID per line, with an expiry and a comment:
 
 ```
 # Not deployed with this setting; review by the expiry date.

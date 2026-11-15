@@ -53,8 +53,8 @@ ignore:
 
 - **Network:**
   - Grype downloads its vulnerability database and updates it automatically (`db.auto-update`). It refuses a database older than about five days.
-  - Both tools check for a newer version at launch: `GRYPE_CHECK_FOR_APP_UPDATE=false` and `SYFT_CHECK_FOR_APP_UPDATE=false` turn that off.
-  - To scan offline, import a database fetched beforehand (`grype db import`), and set `GRYPE_DB_AUTO_UPDATE=false`.
+  - Both tools check for a newer version at launch. The config key `check-for-app-update: false` turns that off (as an environment variable: `GRYPE_CHECK_FOR_APP_UPDATE=false`, `SYFT_CHECK_FOR_APP_UPDATE=false`).
+  - To scan offline, import a database fetched beforehand (`grype db import`), and turn off `db.auto-update` (`GRYPE_DB_AUTO_UPDATE=false`).
   - Syft's `--enrich` queries online sources: don't use it on a confidential project.
 - **Images:** scanning an image by name pulls it, unless it's already local or given as an archive.
 - **Help over this file:** run `grype --help` and `syft --help` once per session; they win over this file.

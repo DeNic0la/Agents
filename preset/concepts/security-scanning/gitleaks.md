@@ -12,7 +12,7 @@ Finds secrets (API keys, tokens, passwords, private keys) in files, git history 
 
 Check: `gitleaks version` (8.30.1 was current in November 2026).
 
-1. Windows: `winget install --id Gitleaks.Gitleaks -e`. It's a community manifest, so check the installed binary's version against the release and its checksums file.
+1. Windows: `winget install --id Gitleaks.Gitleaks -e`. It's a community manifest. Before installing, check that `winget show --id Gitleaks.Gitleaks` names the official release zip as its installer URL, and that its SHA256 matches that zip's line in the release's checksums file.
 2. A release archive from https://github.com/gitleaks/gitleaks/releases (`gitleaks_<version>_windows_x64.zip`, `..._linux_x64.tar.gz`), checked against `gitleaks_<version>_checksums.txt`. Releases carry no signatures, so the checksum is the only check.
 3. Container: `ghcr.io/gitleaks/gitleaks` (also `zricethezav/gitleaks`).
 4. From source with `make build`, as its README shows.
@@ -34,7 +34,7 @@ Check: `gitleaks version` (8.30.1 was current in November 2026).
 - The subcommands `detect` and `protect` are deprecated since v8.19.0. Use `git` and `dir`.
 
 **Accepted risk** (a false positive or a test fixture):
-- add the finding's fingerprint to `.gitleaksignore` in the repo root (or a file given with `-i`), with a comment line above it giving the reason and a review-by date; or
+- add the finding's fingerprint to `.gitleaksignore` in the repo root (or a file or folder given with `-i`), and give the reason and a review-by date in the commit that adds it; or
 - put a `gitleaks:allow` comment on the line itself.
 
 Neither has an expiry date. Never ignore a real secret: rotate it.
