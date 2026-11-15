@@ -13,7 +13,7 @@ Each concept is a folder with `CONCEPT.md` as its entry point. Open a concept on
 | [issue-tracker](issue-tracker/CONCEPT.md) | reading an issue from, or writing an issue, comment, label, link or status to, the project's issue tracker (Jira, GitLab, ...) |
 | [incident-management](incident-management/CONCEPT.md) | production is down or degraded, an alert or rollback trigger fires, a P1 ticket reports an outage, or you write or read an incident record, status update, postmortem or incident follow-up |
 | [domain-driven-design](domain-driven-design/CONCEPT.md) | writing, reviewing or refactoring application code: layering, pure core, explicit call sites, domain naming, error handling, library first |
-| [tools](tools/CONCEPT.md) | a task matches a listed external tool (maigret, Pulse Diagnostics, ...), or you notice repeated work an established program would do better: set tools up after a yes, and recommend unlisted ones |
+| [external-tools](external-tools/CONCEPT.md) | a task matches a listed external tool (maigret, Pulse Diagnostics, ...), or you notice repeated work an established program would do better: set tools up after a yes, and recommend unlisted ones |
 
 ## Adding a concept
 
