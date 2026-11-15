@@ -14,7 +14,7 @@ Write SQL that is correct first, then fast, then readable, in the dialect the us
 - Any analytical query: from a one-line count to a cohort or funnel analysis.
 - Optimizing, translating or debugging an existing query.
 
-Not for application database code (ORM queries, migrations, schema design).
+Not for application database code (ORM queries, migrations, schema design; for schemas use `schema-design`).
 
 If the project or the user's skills include a company-specific data skill (such as `<company>-data-analyst`, made with the `data-context-extractor` skill), follow its entity definitions, standard filters and metric formulas.
 

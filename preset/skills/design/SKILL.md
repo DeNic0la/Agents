@@ -23,7 +23,7 @@ If nothing here fits, name the router that does: `think`, `planning`, `build`, `
 
 - Terms and domain decisions: `domain-modeling`. A plan to grill while the glossary and ADRs stay current: `grill-with-docs`.
 - A new system or major component: `system-design`. Choosing a technology or reviewing a design proposal: `architecture`.
-- A module's depth and seams: `codebase-design`. A public API or contract other code depends on: `api-and-interface-design`.
+- A module's depth and seams: `codebase-design`. A public API or contract other code depends on: `api-and-interface-design`. Tables, keys, indexes or a schema migration: `schema-design`.
 - An existing codebase that has become hard to change: `improve-codebase-architecture`.
 
 ## Skills
@@ -36,4 +36,5 @@ If nothing here fits, name the router that does: `think`, `planning`, `build`, `
 | architecture | compare technology options or review a design proposal, and record the decision as an ADR | agent |
 | codebase-design | design deep modules with a shared vocabulary for interfaces, seams and depth | agent |
 | api-and-interface-design | design APIs and module interfaces | agent |
+| schema-design | design or review database schemas (keys, types, constraints, indexes, partitioning) and deliver them as a migration | agent |
 | improve-codebase-architecture | assess the architecture, stop if healthy, else design a deepening from an HTML report and plan it for `implement` | user |

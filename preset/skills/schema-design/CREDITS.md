@@ -1,0 +1,1 @@
+Adapted from the `data-schema-design` skill in [db-artisan](https://github.com/Yuuzulight/db-artisan) by Aurora Ong (Yuuzulight), MIT License. Rewritten to fit this preset: workflow, engine facts and patterns corrected and extended.
