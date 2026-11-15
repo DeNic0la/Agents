@@ -21,7 +21,7 @@ This folder is the list of tools I want agents to have. Each tool has one file n
 1. **Use the listed tool before doing the job by hand.** When a task matches a row above, open the tool's file and use it instead of scripting the same thing yourself.
 2. **Check before installing.** Run the tool's check command (usually `<tool> --version`). If it works, use it.
 3. **Ask once, then install.** If it's missing, tell the user which tool, the install command from its file and why, and wait for a yes. A yes covers that tool on this machine, not every tool.
-4. **Install in user space, isolated.** Prefer the method the file lists first, usually a per-tool installer (`uv tool install`, `pipx install`, a release binary, a container image). Never use `sudo`, admin rights or a global `pip install` without asking for that step separately. Don't change the project's own dependencies to get a tool.
+4. **Install in user space, isolated.** Prefer the method the file lists first: `uv tool install` for Python tools, `pnpm add -g` for Node.js tools, else a release binary or a container image. Never use `sudo`, admin rights, `pip install` or `npm install -g` without asking for that step separately. Don't change the project's own dependencies to get a tool.
 5. **Verify.** Run the check command again and say the installed version. If install fails, report the error and the next install method from the file; don't work around it with unofficial builds or forks.
 6. **Check flags before first use.** Run `<tool> --help` once per session before relying on a flag from the tool's file. Tools change between versions; the help output wins over the file.
 

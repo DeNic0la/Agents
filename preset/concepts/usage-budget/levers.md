@@ -20,7 +20,7 @@ Where the numbers are:
 
 In this preset (`tools/claude/`, installed into `~/.claude`; the scripts need Node.js):
 - `settings.json` sets `CLAUDE_CODE_SUBAGENT_MODEL=sonnet`, so an agent without a tier runs on Sonnet instead of the session's model. It sets `autoCompactWindow` to 200000 and registers the two scripts below.
-- `statusline/usage-pace.js` shows the model, the context size, 5-hour usage, and weekly usage against the pace line. It saves the last reading to `~/.claude/usage-pace.json` (`seven_day.used`, `seven_day.resets_at`, `five_hour.used`, `updated_at`), where skills and the hook read it. `USAGE_PACE_RESERVE` sets the reserve in percent (default 10).
+- `statusline/usage-pace.js` shows the model, the context size, 5-hour usage, and weekly usage against the pace line, then advice: `▲ use more ~19%/day (+60%)`, `● on pace`, or `▼ ease off ~8%/day (−40%)`. That's the daily amount that uses the rest of the week except the reserve, and how it compares with your daily rate so far. It records every change in weekly usage to `~/.claude/usage-history.jsonl` (the last 8 weeks). Once a whole week is recorded, it spreads the budget over the weekdays you actually use Claude and says `%/workday`. It saves the last reading to `~/.claude/usage-pace.json` (`seven_day.used`, `seven_day.resets_at`, `five_hour.used`, `updated_at`), where skills and the hook read it. `USAGE_PACE_RESERVE` sets the reserve in percent (default 10).
 - `hooks/usage-guard.js` asks before a workflow, or a subagent on a top-tier model, while weekly usage is ahead of pace. It also asks before a model switch on a context over `USAGE_SWITCH_ASK_TOKENS` tokens (default 100000).
 - The `usage-review` skill reports where past usage went, from this machine's transcripts.
 

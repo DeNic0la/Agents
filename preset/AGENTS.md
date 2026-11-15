@@ -37,6 +37,12 @@ If a repository has its own version of a skill in `.agents/skills/<name>/`, alwa
 
 When you write, review or refactor application code, follow `~/.agents/concepts/domain-driven-design/CONCEPT.md`: domain names instead of `utils`, business logic pure and separate from I/O and transport, decisions and side effects visible at the call site, typed error handling, and an established library before custom infrastructure code. The project's own conventions and ADRs take precedence.
 
+## Package managers
+
+- JavaScript and TypeScript: pnpm, not npm or yarn. Use `pnpm install`, `pnpm add`, `pnpm dlx` instead of `npx`, and `pnpm add -g` for global tools.
+- Python: uv. Use `uv run`, `uv add`, `uv sync`, `uvx` for one-off tools, `uv tool install` for CLIs and `uv python install` for interpreters. Never `pip install` into a system Python.
+- In an existing project, use the package manager its lockfile or docs show, and ask before migrating it to another.
+
 ## Out of scope
 
 When you triage an issue or pull request, first check the repository's `.out-of-scope/` folder for a prior rejection of the same concept and surface it to the maintainer. When the maintainer rejects an enhancement, record it there. The details are in `~/.agents/concepts/out-of-scope/CONCEPT.md`.

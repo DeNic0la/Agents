@@ -12,14 +12,13 @@ Collects a dossier on a person from a username alone: it checks thousands of sit
 
 Check: `maigret --version`
 
-Needs Python 3.10 or later (3.11 recommended).
+Needs Python 3.10 or later (3.11 recommended); uv installs one if none is there.
 
-1. `uv tool install maigret` (upgrade: `uv tool upgrade maigret`)
-2. `pipx install maigret` (upgrade: `pipx upgrade maigret`)
-3. Docker, if Python isn't available: `docker pull soxoj/maigret`, then `docker run -v <output-dir>:/app/reports soxoj/maigret:latest <username> --html`
-4. Windows without Python: `maigret_standalone.exe` from the GitHub releases page
+1. `uv tool install maigret` (upgrade: `uv tool upgrade maigret`). For a one-off run without installing: `uvx maigret <username>`.
+2. Docker, if uv isn't available: `docker pull soxoj/maigret`, then `docker run -v <output-dir>:/app/reports soxoj/maigret:latest <username> --html`
+3. Windows without uv: `maigret_standalone.exe` from the GitHub releases page
 
-PDF reports need the extra: `uv tool install 'maigret[pdf]'` or `pipx install 'maigret[pdf]'`. On Windows that needs nothing else. On Linux and macOS it needs the cairo headers, which need a system package manager (`apt`, `dnf`, `brew`) and so a separate yes. Without the extra, the other formats still work.
+PDF reports need the extra: `uv tool install 'maigret[pdf]'`. On Windows that needs nothing else. On Linux and macOS it needs the cairo headers, which need a system package manager (`apt`, `dnf`, `brew`) and so a separate yes. Without the extra, the other formats still work.
 
 ## Run
 

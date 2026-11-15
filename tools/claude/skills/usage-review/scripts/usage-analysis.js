@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Where did Claude Code usage go? Reads this machine's session transcripts and prints a report.
-// Usage: node usage-analysis.js [--days N] [--dir <projects dir>] [--json <file>]
+// Usage: node usage-analysis.js [--days N] [--dir <projects dir>] [--json <file>] [--private]
+// --private replaces project names and session titles with numbers (for sharing the report).
 // Costs are API-equivalent USD. Per-model prices come from Claude Code's own per-session
 // "cost-state" records, using the standard token weights below. Nothing leaves the machine.
 'use strict';
@@ -12,6 +13,7 @@ const configDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.cla
 const root = arg('--dir', path.join(configDir, 'projects'));
 const days = Number(arg('--days', 0));
 const outJson = arg('--json', null);
+const priv = argv.includes('--private');
 const since = days > 0 ? new Date(Date.now() - days * 86400e3).toISOString() : '';
 if (!fs.existsSync(root)) { console.error(`No transcripts at ${root}`); process.exit(1); }
 
@@ -174,12 +176,14 @@ for (const r of priced) {
 P('TOP 5-HOUR BLOCKS: ' + blocks.slice().sort((a, b) => b.cost - a.cost).slice(0, 5).map(b => `${dayOf(b.start)} ${pad(b.start.getHours())}:00 ${usd(b.cost).trim()}`).join(' | '));
 P('');
 P('TOP SESSIONS:');
-for (const g of sessionsByCost.slice(0, 10)) {
+sessionsByCost.slice(0, 10).forEach((g, i) => {
   const d = priced.filter(r => r.sKey === g.key), S = sessions[g.key];
   const split = ['main', 'subagent', 'workflow'].map(a => pct(sum(d.filter(r => r.actor === a), r => r.cost), g.cost));
   const hrs = ((new Date(d[d.length - 1].ts) - new Date(d[0].ts)) / 3600e3).toFixed(1);
-  P(`  ${usd(g.cost)} ${pct(g.cost, TOTAL).padStart(4)} ${dayOf(d[0].ts)} ${hrs.padStart(5)}h ${short(S.project).padEnd(34)} main/sub/wf ${split.join('/')} maxctx ${k(g.ctxMax)}  "${(S.title || '').slice(0, 50)}"`);
-}
+  const name = (priv ? `session ${i + 1}` : short(S.project)).padEnd(34);
+  const title = priv ? '' : `  "${(S.title || '').slice(0, 50)}"`;
+  P(`  ${usd(g.cost)} ${pct(g.cost, TOTAL).padStart(4)} ${dayOf(d[0].ts)} ${hrs.padStart(5)}h ${name} main/sub/wf ${split.join('/')} maxctx ${k(g.ctxMax)}${title}`);
+});
 P('');
 P('AGENTS by type and model:');
 for (const g of group(priced.filter(r => r.actor !== 'main'), r => `${r.actor}: ${r.agentType || '?'} / ${r.model}`).slice(0, 10))
