@@ -1,9 +1,9 @@
 ---
-name: tools
+name: external-tools
 description: When a task matches a tool in this list (looking up a username across sites, diagnosing Windows crashes, ...), or you notice a repeated task that an established external program would do better - check the tool is installed, set it up the way its file says after the user's yes, and recommend tools that aren't listed yet instead of installing them on your own.
 ---
 
-# Tools
+# External tools
 
 Applies to every agent, in any tool, working anywhere. In this concept a **tool** is an external program the agent runs from the shell, such as a CLI, or a desktop app whose output the agent reads. It is not the agent itself (Claude Code, Codex, Copilot), and not a tool built into the agent.
 
