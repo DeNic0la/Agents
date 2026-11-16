@@ -1,0 +1,48 @@
+# The dispatcher (docs/specs/cloud-development-workflow-build.md). While cloud/settings.json
+# says "mode": "dry-run" it changes nothing: it comments on the issue what it would do.
+# The checkout pins the default branch: the rules that judge an issue or pull request
+# never come from a pull request.
+name: dispatch
+
+on:
+  issues:
+    types: [opened, reopened, closed, edited, labeled, unlabeled]
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, reopened, synchronize, closed]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Issue to reconcile (empty reconciles all open issues)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+# One run per issue at a time. A newer pending run replaces an older one, which is
+# safe because every run reads the issue's whole state.
+concurrency:
+  group: dispatch-${{ github.event.issue.number || github.event.pull_request.number || inputs.issue || 'all' }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    # Comments by the dispatcher itself start no run: GITHUB_TOKEN events trigger nothing.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node cloud/dispatcher/cli.js
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CLOUD_STOPPED: ${{ vars.CLOUD_STOPPED }}
