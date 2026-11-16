@@ -135,6 +135,9 @@ global_mappings() {
   # same path under tools/environments/<env>/<tool>/ replaces the default one.
   local env over src
   env="$(machine_environment)"
+  if [ -n "$env" ] && [ ! -d "$tools/environments/$env" ]; then
+    echo "warning: there's no tools/environments/$env - using the default tool files" >&2
+  fi
   for tool in claude codex copilot; do
     case "$tool" in claude) home="$CLAUDE_HOME" ;; codex) home="$CODEX_HOME" ;; copilot) home="$COPILOT_HOME" ;; esac
     over=""
@@ -159,10 +162,16 @@ global_mappings() {
 # The environment named in ~/.agents/local/environment (e.g. "work"), or nothing.
 # Only a plain name counts, so the file can't point outside tools/environments/.
 machine_environment() {
-  local file="$AGENTS_HOME/local/environment" name=""
+  local file="$AGENTS_HOME/local/environment" name="" LC_ALL=C
   if [ -f "$file" ]; then read -r name < "$file" || true; fi
+  name="${name#$'\xEF\xBB\xBF'}"
   name="${name%$'\r'}"
   name="${name%"${name##*[![:space:]]}"}"
-  case "$name" in ""|.*|*[!A-Za-z0-9._-]*) return 0 ;; esac
+  [ -n "$name" ] || return 0
+  case "$name" in
+    .*|*[!A-Za-z0-9._-]*)
+      echo "warning: ignoring ~/.agents/local/environment: \"$name\" isn't a plain name - using the default tool files" >&2
+      return 0 ;;
+  esac
   printf '%s' "$name"
 }

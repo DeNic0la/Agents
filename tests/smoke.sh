@@ -60,6 +60,13 @@ check "the environment's file replaces the default" cmp -s "$envfile" "$HOME/.cl
 echo '../claude' > "$machine_env"
 check "install with an invalid environment name succeeds" run_install
 check "an invalid environment name keeps the default" cmp -s "$TMP/repo/tools/claude/settings.json" "$HOME/.claude/settings.json"
+check "an invalid environment name prints a warning" grep -q '^warning: ignoring' "$TMP/out"
+printf '\357\273\277smoke\n' > "$machine_env"
+check "install with a BOM before the environment name succeeds" run_install
+check "a BOM before the environment name is ignored" cmp -s "$envfile" "$HOME/.claude/settings.json"
+echo 'nosuch' > "$machine_env"
+check "install with an unknown environment succeeds" run_install
+check "an unknown environment prints a warning" grep -q "^warning: there's no tools/environments/nosuch" "$TMP/out"
 rm "$machine_env"
 
 echo "== project"

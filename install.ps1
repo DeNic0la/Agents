@@ -282,14 +282,18 @@ function Get-Mappings {
     # On a machine whose ~/.agents/local/environment names an environment, an entry at the
     # same path under tools/environments/<env>/<tool>/ replaces the default one.
     $machineEnv = Get-MachineEnvironment
+    $envDir = if ($machineEnv) { Join-Path (Join-Path $Tools 'environments') $machineEnv } else { $null }
+    if ($envDir -and -not (Test-Path -LiteralPath $envDir -PathType Container)) {
+        Write-Host "warning: there's no tools/environments/$machineEnv - using the default tool files"
+    }
     $homes = @{ claude = $ClaudeHome; codex = $CodexHome; copilot = $CopilotHome }
     foreach ($tool in 'claude', 'codex', 'copilot') {
-        $over = if ($machineEnv) { Join-Path $Tools "environments\$machineEnv\$tool" } else { $null }
+        $over = if ($envDir) { Join-Path $envDir $tool } else { $null }
         foreach ($e in Get-Children (Join-Path $Tools $tool)) {
             $to = Join-Path $homes[$tool] $e.Name
             if ($e.PSIsContainer) {
                 foreach ($c in Get-Children $e.FullName) {
-                    , @('link', (Select-Source $c.FullName $over "$($e.Name)\$($c.Name)"), (Join-Path $to $c.Name))
+                    , @('link', (Select-Source $c.FullName $over (Join-Path $e.Name $c.Name)), (Join-Path $to $c.Name))
                 }
             } else {
                 , @('link', (Select-Source $e.FullName $over $e.Name), $to)
@@ -301,10 +305,12 @@ function Get-Mappings {
 # The environment named in ~/.agents/local/environment (e.g. "work"), or $null.
 # Only a plain name counts, so the file can't point outside tools\environments\.
 function Get-MachineEnvironment {
-    $file = Join-Path $AgentsHome 'local\environment'
+    $file = Join-Path (Join-Path $AgentsHome 'local') 'environment'
     if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { return $null }
     $name = "$(Get-Content -LiteralPath $file -TotalCount 1)".Trim()
-    if ($name -match '^[A-Za-z0-9_-][A-Za-z0-9._-]*$') { return $name }
+    if (-not $name) { return $null }
+    if ($name -cmatch '^[A-Za-z0-9_-][A-Za-z0-9._-]*$') { return $name }
+    Write-Host "warning: ignoring ~/.agents/local/environment: `"$name`" isn't a plain name - using the default tool files"
     return $null
 }
 

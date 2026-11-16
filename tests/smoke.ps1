@@ -137,6 +137,13 @@ function Test-Install([string]$Mode) {
     [System.IO.File]::WriteAllText($machineEnv, "..\claude`n")
     Test-That 'install with an invalid environment name succeeds' (Invoke-Install $repoCopy $homeDir)
     Test-That 'an invalid environment name keeps the default' ((Get-FileHash -LiteralPath $settings).Hash -eq (Get-FileHash -LiteralPath "$repoCopy\tools\claude\settings.json").Hash)
+    Test-That 'an invalid environment name prints a warning' ([bool]($Out -match '^warning: ignoring'))
+    [System.IO.File]::WriteAllText($machineEnv, "smoke`n", (New-Object System.Text.UTF8Encoding $true))
+    Test-That 'install with a BOM before the environment name succeeds' (Invoke-Install $repoCopy $homeDir)
+    Test-That 'a BOM before the environment name is ignored' ((Get-FileHash -LiteralPath $settings).Hash -eq (Get-FileHash -LiteralPath $envFile).Hash)
+    [System.IO.File]::WriteAllText($machineEnv, "nosuch`n")
+    Test-That 'install with an unknown environment succeeds' (Invoke-Install $repoCopy $homeDir)
+    Test-That 'an unknown environment prints a warning' ([bool]($Out -match "^warning: there's no tools/environments/nosuch"))
     Remove-Item -LiteralPath $machineEnv
 
     if ($Mode -eq 'links') { Test-Project $repoCopy $bin }
