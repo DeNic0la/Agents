@@ -192,5 +192,6 @@
     "write-spec": "name-only",
     "writing-for-agents": "name-only",
     "writing-skills": "name-only"
-  }
+  },
+  "inputNeededNotifEnabled": true
 }
