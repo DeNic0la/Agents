@@ -13,7 +13,9 @@ Kept in one tracked settings file. Changing it is a `merge:human` change.
 | Monthly cap | none; must be set | ceiling for all agent spend in a calendar month |
 | Per-issue cap: direct, lean, full | none; must be set | ceiling per issue from refinement on, by route |
 | Per-run cap: triage, scout | none; must be set | ceiling for one triage of one issue, and for one scout run |
-| Agent permissions | contents, issues and pull requests of this repository; no administration, no workflow files | what the agent identity may do on GitHub |
+| Owner | none; must be set | the GitHub login whose labels, comments and merges count as the owner's |
+| Agent identity | none; must be set | the GitHub login agents act under |
+| Agent permissions | contents, issues and pull requests of this repository; read-only checks, commit statuses and Actions to read CI results; no administration, no workflow files | what the agent identity may do on GitHub |
 | Allowed hosts | GitHub and the platform | the only hosts a session that can push may reach |
 | Parallel implementations | 2 | issues in `in-progress` at the same time |
 | Review rounds | 3 | fix and re-review cycles before the owner is asked |
@@ -28,9 +30,9 @@ Kept in one tracked settings file. Changing it is a `merge:human` change.
 | ID | Requirement |
 |---|---|
 | CW-1 | All work on the repo is tracked as issues on `DeNic0la/Agents`. No agent keeps a backlog, a queue or work state anywhere else. |
-| CW-2 | Every label in the workflow document exists in the repository, and agents create no others. |
-| CW-3 | Every open issue has exactly one state label; `paused` is not a state and sits beside it. The dispatcher gives a new issue `triage` (`needs-answer` when it's `origin:external`, see CW-19), repairs an issue that has no state label or several, and removes the state label, `approved` and `paused` when an issue is closed. |
-| CW-4 | The dispatcher sets the origin label from the issue's author: `origin:owner` for the owner, `origin:agent` for the agent identity, `origin:external` for anyone else. Only the owner can change it afterwards. |
+| CW-2 | Every label in the workflow document exists in the repository, and agents create no others. When the agent identity adds a label that isn't in the workflow document, the dispatcher removes it from the issue and comments why. |
+| CW-3 | Every open issue has exactly one state label; `paused` is not a state and sits beside it. The dispatcher gives a new issue `triage` (`needs-answer` when it's `origin:external`, see CW-19), repairs an issue that has no state label or several, and removes the state label, `approved`, `paused` and `budget:extend` when an issue is closed. When several state labels are set, the one the dispatcher last recorded stays; without a record, the earliest in the life order. |
+| CW-4 | The dispatcher sets the origin label from the issue's author: `origin:owner` for the owner, `origin:agent` for the agent identity, `origin:external` for anyone else. Only the owner can change it afterwards, in any direction. |
 | CW-5 | An agent session asked by the owner for a feature creates an issue containing the owner's words unchanged, and reports its URL. |
 | CW-6 | Before an agent creates an issue it searches open issues, closed issues and `.out-of-scope/` for the same concept, and creates none when it finds one. It comments on the existing issue instead when it has new evidence. |
 | CW-7 | An agent that finds something outside its current issue files an issue for it and changes nothing for it. |
@@ -42,13 +44,13 @@ Kept in one tracked settings file. Changing it is a `merge:human` change.
 |---|---|
 | CW-10 | The dispatcher contains no AI. The same event and repository state always produce the same action. |
 | CW-11 | It starts the right agent for each event: triage for a new or reopened issue that isn't `origin:external`; refine for `refining`; implement for `ready`; review for a pull request opened or updated by the agent identity. When the owner comments on a `needs-answer` issue, it restores the state the issue came from and starts the agent the workflow document's "Waiting for the owner" table names for the reason. |
-| CW-12 | It never starts two sessions for the same issue at the same time, and never more implementations than the setting allows. Further `ready` issues wait, oldest first. |
-| CW-13 | It checks the actor of every label event. `approved`, `budget:extend`, a changed origin label, and removing or lowering a merge class take effect only when the owner did it; otherwise it reverts the change and comments why. |
+| CW-12 | It never starts two sessions for the same issue at the same time, and never more implementations than the setting allows. Further `ready` issues wait, lowest issue number first. Issues in `in-progress` and `in-review` hold a slot. |
+| CW-13 | It checks the actor of every label event. `approved`, `budget:extend`, a changed origin label, and removing or lowering a merge class take effect only when the owner did it; otherwise it reverts the change and comments why. A state label set or removed by anyone but the owner or the dispatcher is reverted the same way: agents report their outcome, and the dispatcher sets the state. |
 | CW-14 | Before starting an implement agent it checks items 3 to 8 of the Definition of Ready, and doesn't start when one fails. It comments which. |
 | CW-15 | It runs in the cloud and needs no machine of the owner's. |
 | CW-16 | A failed or crashed session leaves the issue in its state with a comment naming the failure. The dispatcher retries once, then moves the issue to `needs-answer`. |
 | CW-17 | Every move to `needs-answer` comes with a comment naming the reason and the state the issue came from. |
-| CW-18 | A reopened issue is triaged as a new one, without `approved`. When the owner closes a pull request without merging, its issue moves to `needs-answer`. |
+| CW-18 | A reopened issue is triaged as a new one, without `approved` and without its route. When the owner closes a pull request without merging, its issue moves to `needs-answer`. |
 | CW-19 | A new or reopened `origin:external` issue moves to `needs-answer` with one dispatcher comment, and no session starts for it. When the owner comments, it moves to `triage` and the triage agent starts. |
 
 ## 3. Triage
@@ -56,13 +58,13 @@ Kept in one tracked settings file. Changing it is a `merge:human` change.
 | ID | Requirement |
 |---|---|
 | CW-20 | Every issue is triaged by the triage agent, at the `deep` tier, before any other agent works on it; an `origin:external` issue only after the owner commented on it (CW-19). |
-| CW-21 | Triage ends in exactly one outcome: closed as duplicate with a link; `needs-answer` (an objection, a prior rejection to confirm, or an estimate above the per-issue cap); closed as split, with links to new issues that keep its origin and carry no approval; or a route, a merge class and a cost estimate, with the reasons in one comment. |
+| CW-21 | Triage ends in exactly one outcome: closed as duplicate with a link; `needs-answer` (an objection, a prior rejection to confirm, or an estimate above the per-issue cap); closed as split, with links to new issues that each name the issue they were split from, are `origin:agent` like every issue an agent opens, and carry no approval; or a route, a merge class and a cost estimate, with the reasons in one comment. |
 | CW-27 | On the direct route the triage comment states the acceptance check for the change. |
 | CW-22 | `route:direct` is given only to an `origin:owner` issue that names what to change and leaves no decision open. An `origin:agent` or `origin:external` issue never gets it. |
 | CW-23 | When the owner asks for a plan, or the change spans several areas, changes install or sync behavior, or has a design decision with alternatives, the route is `full`. |
 | CW-24 | An objection is a comment with the reason and an alternative, plus the `objection` label. It never closes an issue. |
 | CW-25 | A match in `.out-of-scope/` is put to the owner as a question. No agent rejects an issue on its own. |
-| CW-26 | When the owner changes what an issue asks for, it's triaged again and loses `approved`. |
+| CW-26 | When the owner changes what an issue asks for (its body outside the marked section; the title doesn't count), it's triaged again and loses `approved`. |
 
 ## 4. Refinement
 
@@ -72,18 +74,18 @@ Kept in one tracked settings file. Changing it is a `merge:human` change.
 | CW-31 | On the full route the section also has the design, the alternatives rejected, the files affected and the implementation steps. |
 | CW-32 | Open questions are asked in one comment, each with a recommended answer, and the issue moves to `needs-answer`. No agent works on the issue until the owner comments. |
 | CW-33 | Each question names where the agent looked for the answer (files, docs, official documentation) before asking. |
-| CW-34 | Refinement ends with an approval request comment (what will be built, route, merge class, estimate, any objection) and the state `needs-approval`. |
+| CW-34 | Refinement ends with an approval request comment (what will be built, route, merge class, estimate, any objection) and the state `needs-approval`. A comment by the owner on a `needs-approval` issue, without `approved`, returns it to `refining` for a revised spec. |
 | CW-35 | A comment by anyone but the owner never changes an issue's spec, route, class or state. |
 
 ## 5. Approval
 
 | ID | Requirement |
 |---|---|
-| CW-40 | An issue that isn't `direct` becomes `ready` only by the owner adding `approved`. |
-| CW-41 | `approved` on an issue with `objection` makes it `ready`, and the dispatcher comments "approved over objection". |
+| CW-40 | An issue that isn't `direct` becomes `ready` only by the owner adding `approved`. `approved` counts in `needs-approval`, and on a `direct` issue that waits only because of an objection; elsewhere the dispatcher removes it and comments when to approve. |
+| CW-41 | `approved` on an issue with `objection` makes it `ready`; the dispatcher removes `objection` and comments "approved over objection". |
 | CW-42 | A change to the marked section after approval removes `approved` and returns the issue to `needs-approval`. |
 | CW-43 | When the owner closes an enhancement as not planned, an agent records it in `.out-of-scope/` in a `merge:self` pull request. Bugs and already-built features are never recorded. |
-| CW-44 | An issue in `needs-answer` or `needs-approval` gets no state change, no session and no comment until the owner acts, however long it waits. The status issue is the only reminder. |
+| CW-44 | An issue in `needs-answer` or `needs-approval` gets no state change, no session and no comment until the owner acts, however long it waits. The status issue is the only reminder. The dispatcher's comments that revert or repair labels (CW-3, CW-13) are not reminders and are still made. |
 
 ## 6. Implementation
 
@@ -101,11 +103,11 @@ Kept in one tracked settings file. Changing it is a `merge:human` change.
 | ID | Requirement |
 |---|---|
 | CW-60 | The review agent runs in a new session without the implement agent's context, at that agent's tier or higher. |
-| CW-61 | Every pull request except `merge:self` gets a review against the acceptance criteria, the merge class and each item of the Definition of Done. The review states the result per item. |
+| CW-61 | Every pull request the agent identity opened, except `merge:self`, gets a review against the acceptance criteria, the merge class and each item of the Definition of Done. The review states the result per item. |
 | CW-62 | The dispatcher computes the lowest merge class the workflow document allows for the changed paths, file types and diff size, sets it when it's higher than the label, and repeats this on every push. |
 | CW-63 | `merge:self`: the implement agent merges when CI is green and the dispatcher confirmed the class. Every self-merge is listed in the next status issue update. |
-| CW-64 | `merge:agent`: the review agent merges when it approves and CI is green. |
-| CW-65 | `merge:human`: no agent can merge. The review ends in a recommendation in the wording the workflow document gives, with the reason for the class and the explanation. |
+| CW-64 | `merge:agent`: the review agent merges when it approves and CI is green. The approval is the review session's result, which the dispatcher records; `merge-gate` reads that record. |
+| CW-65 | `merge:human`: no agent can merge. A pull request the owner opened is the owner's to merge and needs no agent review. The review ends in a recommendation in the wording the workflow document gives, with the reason for the class and the explanation. |
 | CW-66 | Repository protection enforces CW-63 to CW-65: the agent identity can't merge a `merge:human` pull request, can't merge with failing checks, and can't change the protection. |
 | CW-67 | Any agent may raise a merge class and must do so on a security concern. No agent can lower one. |
 | CW-68 | Review findings return the issue to `in-progress`. After the configured review rounds without a pass, or with CI still failing, the issue moves to `needs-answer` with the open findings. |
@@ -128,9 +130,9 @@ Kept in one tracked settings file. Changing it is a `merge:human` change.
 | CW-80 | The dispatcher starts no session while any cap in the settings isn't set. |
 | CW-81 | Every session starts with a hard cost limit: what's left of its issue's cap from refinement on, the per-run cap for a triage or a scout run. |
 | CW-82 | An issue that reaches its cap gets `paused` and a cost report, and keeps its state label. `budget:extend` from the owner allows one more cap, removes `paused`, restarts the agent for the state, and is removed when used. |
-| CW-83 | When the month's spend reaches the monthly cap, no session starts and running sessions stop at their next step. Issues keep their labels, and the status issue is updated at once. Work resumes where it stopped at the turn of the month or when the owner raises the cap. |
-| CW-84 | One owner action stops all agents the way the monthly cap does, and one resumes them. While stopped, the dispatcher starts nothing. |
-| CW-85 | Every session's cost is recorded on its issue, and all sessions count toward the monthly cap: triage, refinement, implementation, review and scouting. |
+| CW-83 | When the month's spend reaches the monthly cap, no session starts and running sessions can't pass it: every hard limit is bounded by what's left of the month, less what running sessions may still spend. Issues keep their labels, and the status issue is updated at once. Work resumes where it stopped at the turn of the month or when the owner raises the cap. |
+| CW-84 | One owner action stops all agents at once, interrupting running sessions, and one resumes them. While stopped, the dispatcher starts nothing. |
+| CW-85 | Every session's cost is recorded on its issue (a scout run's on the status issue), and all sessions count toward the monthly cap: triage, refinement, implementation, review and scouting. |
 | CW-86 | When the month's spend passes the warning level, the status issue says so at its next update. |
 | CW-87 | A triage that reaches its per-run cap moves the issue to `needs-answer`. A scout run that reaches its cap files what it has and stops. |
 

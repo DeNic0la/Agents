@@ -43,7 +43,7 @@ new → triage ──→ refining ──→ needs-approval ──→ ready ─�
 needs-answer: reachable from triage, refining, in-progress and in-review; returns to the state it came from.
 ```
 
-An open issue carries exactly one state label. An issue without one counts as `triage`. Closing an issue removes its state label, `approved` and `paused`.
+An open issue carries exactly one state label. An issue without one counts as `triage`. Closing an issue removes its state label, `approved`, `paused` and `budget:extend`. Agents report how their work ended; the dispatcher sets the state label from that report, and reverts a state label anyone but the owner or the dispatcher changed. "Who moves it on" names whose work or answer ends the state.
 
 | State label | Meaning | Who moves it on |
 |---|---|---|
@@ -59,7 +59,7 @@ Other labels:
 
 | Label | Set by | Meaning |
 |---|---|---|
-| `origin:owner`, `origin:agent`, `origin:external` | dispatcher, from the issue's author; the owner may change it to `origin:owner` | who asked. External means anyone who is neither the owner nor an agent. |
+| `origin:owner`, `origin:agent`, `origin:external` | dispatcher, from the issue's author; only the owner may change it | who asked. External means anyone who is neither the owner nor an agent. |
 | `route:direct`, `route:lean`, `route:full` | triage agent | how much refinement the issue gets |
 | `merge:self`, `merge:agent`, `merge:human` | triage agent; raised by any agent; `merge:human` also by the owner | who may merge the change |
 | `approved` | owner only | the owner's yes to implement the spec as written |
@@ -80,7 +80,7 @@ The triage agent reads the whole issue and decides, in this order:
 1. **Duplicate?** Link the existing issue and close this one.
 2. **Rejected before?** If `.out-of-scope/` has the same concept, say so and ask the owner whether the earlier decision still holds ([out-of-scope](../preset/concepts/out-of-scope/CONCEPT.md)). The decision is the owner's.
 3. **A bad idea?** If the issue conflicts with [vision.md](vision.md), weakens a safety rule, costs far more than it gives, or has a clearly better alternative, add `objection` and say why and what to do instead. An objection doesn't close anything: the owner decides.
-4. **Too large for one pull request?** Split it into issues that each stand alone, and close the original with links to them. Each new issue keeps the original's origin, is triaged on its own, and needs its own approval.
+4. **Too large for one pull request?** Split it into issues that each stand alone, and close the original with links to them. Each new issue names the issue it was split from, is `origin:agent` like every issue an agent opens, is triaged on its own, and needs its own approval.
 5. **Route** (below).
 6. **Merge class** ([Merging](#merging)).
 7. **Cost estimate**, checked against the per-issue cap for the route. If the estimate is above the cap, the triage agent asks the owner to set `budget:extend` or to agree to a smaller scope.
@@ -168,13 +168,13 @@ An issue has one branch and one pull request. An agent that continues after a fa
 | Class | Applies to | Who merges |
 |---|---|---|
 | `merge:self` | a typo, spelling or formatting fix of at most 10 changed lines that changes no meaning, in Markdown files outside the `merge:human` paths; a change only to `README.md` or to files in `docs/` that the other two classes don't name; an `.out-of-scope/` record of a decision the owner made | the implement agent, once CI is green |
-| `merge:agent` | everything not in the other two classes: skills, personas, commands, references, tests, `REQUIREMENTS.md`, `docs/decisions/` | the review agent, when it approves and CI is green |
+| `merge:agent` | everything not in the other two classes: skills, personas, commands, references, tests, `REQUIREMENTS.md`, `docs/decisions/`, `docs/specs/` | the review agent, when it approves and CI is green |
 | `merge:human` | see below | the owner only |
 
 A change is `merge:human` when any of these is true:
 
 - It touches what runs on or governs the owner's machines: `install.sh`, `install.ps1`, `bin/`, `lib/`, `tools/` (tool settings, permissions, hooks, status line), any hook, any other executable file, `preset/AGENTS.md`, `preset/concepts/`, the root `AGENTS.md` and `CLAUDE.md`, `.github/`, CI and repository settings.
-- It touches the rules of this workflow: `cloud/` (the dispatcher, its settings and the cloud agents' definitions), this file, its [spec](specs/cloud-development-workflow.md) and [decision record](decisions/0008-cloud-development-on-github-issues.md), [vision.md](vision.md), [model.md](model.md), the cloud agents' definitions, the dispatcher or its settings.
+- It touches the rules of this workflow: `cloud/` (the dispatcher, its settings and the cloud agents' definitions), this file, its [spec](specs/cloud-development-workflow.md), [build plan](specs/cloud-development-workflow-build.md) and [decision record](decisions/0008-cloud-development-on-github-issues.md), [vision.md](vision.md), [model.md](model.md), the cloud agents' definitions, the dispatcher or its settings.
 - It removes or narrows a safety rule, wherever that rule is written.
 - It adds a dependency or an external tool, or adopts content from outside the repo.
 - It touches credentials, permissions or network access.
