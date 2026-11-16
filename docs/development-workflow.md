@@ -71,7 +71,7 @@ Other labels:
 
 - **The owner wants something:** the owner writes an issue, or tells any agent session (local or cloud), which writes it in the owner's words and says so. A local session files it with the owner's own GitHub login, so it's `origin:owner`. A cloud session files it under the agent identity, so it's `origin:agent` until the owner changes the label to `origin:owner`.
 - **An agent has a recommendation:** it files an issue with what it recommends, the evidence, and what it would cost and replace. It first searches open and closed issues and `.out-of-scope/` and files nothing that exists already. An agent that notices something off its current goal files an issue too, and doesn't act on it.
-- **Someone else** opens an issue: it's `origin:external` and treated as a recommendation.
+- **Someone else** opens an issue: it's `origin:external` and waits. The dispatcher moves it to `needs-answer` with one comment and starts no agent, so it costs nothing. When the owner comments, it's triaged and treated as a recommendation; when the owner closes it, it's dropped.
 
 ### 2. Triage
 
@@ -118,6 +118,7 @@ An issue moves to `needs-answer` with a comment that names the reason and the st
 | Review rounds used up, or CI never green | review agent | the implement agent continues in `in-progress` with the owner's direction |
 | The owner closed the pull request without merging | dispatcher | the implement agent continues in `in-progress` with the owner's direction |
 | A session failed twice | dispatcher | the agent for the state it came from starts again |
+| The issue was opened by someone else | dispatcher | the triage agent starts |
 
 To drop an issue instead of answering, the owner closes it.
 
@@ -172,8 +173,8 @@ An issue has one branch and one pull request. An agent that continues after a fa
 
 A change is `merge:human` when any of these is true:
 
-- It touches what runs on or governs the owner's machines: `install.sh`, `install.ps1`, `bin/`, `lib/`, `tools/` (tool settings, permissions, hooks, status line), any hook, any other executable file, `preset/AGENTS.md`, `preset/concepts/`, the root `AGENTS.md` and `CLAUDE.md`, CI and repository settings.
-- It touches the rules of this workflow: this file, its [spec](specs/cloud-development-workflow.md) and [decision record](decisions/0008-cloud-development-on-github-issues.md), [vision.md](vision.md), [model.md](model.md), the cloud agents' definitions, the dispatcher or its settings.
+- It touches what runs on or governs the owner's machines: `install.sh`, `install.ps1`, `bin/`, `lib/`, `tools/` (tool settings, permissions, hooks, status line), any hook, any other executable file, `preset/AGENTS.md`, `preset/concepts/`, the root `AGENTS.md` and `CLAUDE.md`, `.github/`, CI and repository settings.
+- It touches the rules of this workflow: `cloud/` (the dispatcher, its settings and the cloud agents' definitions), this file, its [spec](specs/cloud-development-workflow.md) and [decision record](decisions/0008-cloud-development-on-github-issues.md), [vision.md](vision.md), [model.md](model.md), the cloud agents' definitions, the dispatcher or its settings.
 - It removes or narrows a safety rule, wherever that rule is written.
 - It adds a dependency or an external tool, or adopts content from outside the repo.
 - It touches credentials, permissions or network access.
@@ -191,6 +192,7 @@ Rules for classes:
 - Whether a small fix changes meaning is the implement agent's call, and the dispatcher can't check it. So every self-merge is listed in the weekly status issue, where the owner sees it.
 - Any agent may raise a class, at any time. Only the owner may lower one, and never below what the paths and size require.
 - Branch protection makes the classes real: an agent identity can't merge a `merge:human` pull request, and can't merge any pull request with failing checks.
+- Cloud agents never change files under `.github/workflows/`: the agent identity has no permission to, because those files are the gates. The owner or a local session makes such changes.
 
 ### Definition of Done
 

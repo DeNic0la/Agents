@@ -13,7 +13,7 @@ Kept in one tracked settings file. Changing it is a `merge:human` change.
 | Monthly cap | none; must be set | ceiling for all agent spend in a calendar month |
 | Per-issue cap: direct, lean, full | none; must be set | ceiling per issue from refinement on, by route |
 | Per-run cap: triage, scout | none; must be set | ceiling for one triage of one issue, and for one scout run |
-| Agent permissions | contents, issues and pull requests of this repository; no administration | what the agent identity may do on GitHub |
+| Agent permissions | contents, issues and pull requests of this repository; no administration, no workflow files | what the agent identity may do on GitHub |
 | Allowed hosts | GitHub and the platform | the only hosts a session that can push may reach |
 | Parallel implementations | 2 | issues in `in-progress` at the same time |
 | Review rounds | 3 | fix and re-review cycles before the owner is asked |
@@ -29,7 +29,7 @@ Kept in one tracked settings file. Changing it is a `merge:human` change.
 |---|---|
 | CW-1 | All work on the repo is tracked as issues on `DeNic0la/Agents`. No agent keeps a backlog, a queue or work state anywhere else. |
 | CW-2 | Every label in the workflow document exists in the repository, and agents create no others. |
-| CW-3 | Every open issue has exactly one state label; `paused` is not a state and sits beside it. The dispatcher gives a new issue `triage`, repairs an issue that has no state label or several, and removes the state label, `approved` and `paused` when an issue is closed. |
+| CW-3 | Every open issue has exactly one state label; `paused` is not a state and sits beside it. The dispatcher gives a new issue `triage` (`needs-answer` when it's `origin:external`, see CW-19), repairs an issue that has no state label or several, and removes the state label, `approved` and `paused` when an issue is closed. |
 | CW-4 | The dispatcher sets the origin label from the issue's author: `origin:owner` for the owner, `origin:agent` for the agent identity, `origin:external` for anyone else. Only the owner can change it afterwards. |
 | CW-5 | An agent session asked by the owner for a feature creates an issue containing the owner's words unchanged, and reports its URL. |
 | CW-6 | Before an agent creates an issue it searches open issues, closed issues and `.out-of-scope/` for the same concept, and creates none when it finds one. It comments on the existing issue instead when it has new evidence. |
@@ -41,7 +41,7 @@ Kept in one tracked settings file. Changing it is a `merge:human` change.
 | ID | Requirement |
 |---|---|
 | CW-10 | The dispatcher contains no AI. The same event and repository state always produce the same action. |
-| CW-11 | It starts the right agent for each event: triage for a new or reopened issue; refine for `refining`; implement for `ready`; review for a pull request opened or updated by the agent identity. When the owner comments on a `needs-answer` issue, it restores the state the issue came from and starts the agent the workflow document's "Waiting for the owner" table names for the reason. |
+| CW-11 | It starts the right agent for each event: triage for a new or reopened issue that isn't `origin:external`; refine for `refining`; implement for `ready`; review for a pull request opened or updated by the agent identity. When the owner comments on a `needs-answer` issue, it restores the state the issue came from and starts the agent the workflow document's "Waiting for the owner" table names for the reason. |
 | CW-12 | It never starts two sessions for the same issue at the same time, and never more implementations than the setting allows. Further `ready` issues wait, oldest first. |
 | CW-13 | It checks the actor of every label event. `approved`, `budget:extend`, a changed origin label, and removing or lowering a merge class take effect only when the owner did it; otherwise it reverts the change and comments why. |
 | CW-14 | Before starting an implement agent it checks items 3 to 8 of the Definition of Ready, and doesn't start when one fails. It comments which. |
@@ -49,12 +49,13 @@ Kept in one tracked settings file. Changing it is a `merge:human` change.
 | CW-16 | A failed or crashed session leaves the issue in its state with a comment naming the failure. The dispatcher retries once, then moves the issue to `needs-answer`. |
 | CW-17 | Every move to `needs-answer` comes with a comment naming the reason and the state the issue came from. |
 | CW-18 | A reopened issue is triaged as a new one, without `approved`. When the owner closes a pull request without merging, its issue moves to `needs-answer`. |
+| CW-19 | A new or reopened `origin:external` issue moves to `needs-answer` with one dispatcher comment, and no session starts for it. When the owner comments, it moves to `triage` and the triage agent starts. |
 
 ## 3. Triage
 
 | ID | Requirement |
 |---|---|
-| CW-20 | Every new issue is triaged by the triage agent, at the `deep` tier, before any other agent works on it. |
+| CW-20 | Every issue is triaged by the triage agent, at the `deep` tier, before any other agent works on it; an `origin:external` issue only after the owner commented on it (CW-19). |
 | CW-21 | Triage ends in exactly one outcome: closed as duplicate with a link; `needs-answer` (an objection, a prior rejection to confirm, or an estimate above the per-issue cap); closed as split, with links to new issues that keep its origin and carry no approval; or a route, a merge class and a cost estimate, with the reasons in one comment. |
 | CW-27 | On the direct route the triage comment states the acceptance check for the change. |
 | CW-22 | `route:direct` is given only to an `origin:owner` issue that names what to change and leaves no decision open. An `origin:agent` or `origin:external` issue never gets it. |
@@ -143,6 +144,7 @@ Kept in one tracked settings file. Changing it is a `merge:human` change.
 | CW-93 | A session whose credentials can push reaches only the allowed hosts in the settings. Only sessions without push access (scout, research) may read the wider web. |
 | CW-94 | Content from outside the repository enters only through an audited, rewritten change (`bin/agents audit`), which is `merge:human`. |
 | CW-95 | No agent changes the settings file, the agent definitions, the dispatcher or the repository protection except through a `merge:human` pull request. |
+| CW-96 | The agent identity has no permission to change files under `.github/workflows/`. Such changes are made by the owner or a local session. |
 
 ## 11. Platform and records
 
@@ -168,4 +170,5 @@ The build is complete when each of these runs as described, with no step done by
 9. **Per-issue cap.** An issue reaches its cap, is `paused` with a cost report, and continues after `budget:extend`.
 10. **Monthly cap and stop switch.** At the cap, nothing new starts; the stop switch halts running work at once.
 11. **Rejection.** The owner closes an enhancement as not planned; an `.out-of-scope/` record appears; a later issue for the same concept is put to the owner with that record.
-12. **Injection.** An external issue tells agents to run a command and skip review. Nothing is run; the triage agent reports it.
+12. **Injection.** An external issue tells agents to run a command and skip review. No session starts until the owner comments on it. Then nothing is run, and the triage agent reports the instruction.
+13. **External issue.** A stranger opens an issue. It gets `origin:external`, `needs-answer` and one comment, and costs nothing, however long it waits.
