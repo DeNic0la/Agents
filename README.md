@@ -6,6 +6,8 @@ My personal setup for AI coding agents (**Claude Code**, **Codex** and **GitHub 
 - **Per project:** in any repository, `agents setup` copies chosen items into the folders each tool reads, where they can be committed.
 - **Up to date:** `agents update` pulls the latest version of this repo and refreshes your home and every project on the machine that uses it.
 
+What this project is meant to be, how tailoring to repositories works and why things are the way they are: [docs/](docs/README.md).
+
 Everything is written once in a tool-neutral form and installed where each tool expects it. Works on Linux, native Windows, and Windows with WSL. The full list of requirements is in [REQUIREMENTS.md](REQUIREMENTS.md).
 
 ## The mental model

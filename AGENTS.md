@@ -2,6 +2,8 @@
 
 This repo is my personal agent preset for Claude Code, Codex and GitHub Copilot. See [README.md](README.md) for usage and [REQUIREMENTS.md](REQUIREMENTS.md) for what it must do.
 
+- [docs/](docs/README.md) says what this project is meant to be. Read `docs/vision.md` and `docs/model.md` before changing how items are installed, copied or tailored; record a decision with alternatives in `docs/decisions/`, and keep the docs in step with the code.
+
 - Before adding to `preset/`, check which layer the content belongs to (README, "The mental model"): workflows are skills, roles are personas (`agents/`), entry points are commands, shared checklists are references. Project-specific files (DoD, testing patterns, ...) are kept only as recipes in `references/`, never as example content.
 - Everything under `preset/` is instructions for AI agents. It must follow the concepts in [preset/concepts/INDEX.md](preset/concepts/INDEX.md); read the index before adding or changing anything there.
 - Content under `preset/` must stay tool-neutral. Tool-specific files go in `tools/<tool>/`.
