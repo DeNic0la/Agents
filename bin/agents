@@ -18,17 +18,21 @@ usage() {
   cat <<'EOF'
 usage: agents <command> [args]
 
-In a project (copies files into the project, meant to be committed):
-  setup [item...]    pick which items this project uses (interactive without args)
+In a checkout (copies files into it; nothing is ever tracked: .git/info/exclude hides them):
+  setup [item...]    pick which items this checkout uses (interactive without args)
   add <item>...      add items
   remove <item>...   remove items and their copied files
-  list               show available items (* = used in this project)
-  sync               re-apply this project's items without pulling (e.g. after a repo skill was generated)
+  list               show available items (* = used in this checkout)
+  sync               re-apply this checkout's items without pulling (e.g. after a level was written)
   --dry-run          with setup/add/remove/sync: show what would change, change nothing
+  --project <name>   with setup/add/remove/sync: name the project (default: the origin's repository name)
+  --store <where>    with setup/add/remove/sync: keep the project level on this machine (machine, the
+                     default) or in this repo under projects/<name>/ (agents)
 
-Skills you add get a repo version: generated from the skill's recipe, tailored to the project,
-and preferred over the global version. Global skills (no recipe) are copied as they are.
-Skills you don't add stay global.
+Tailored skills and subagents have a core (this repo) plus levels: what the project and this
+checkout add. `sync` composes them into the files each tool reads. Skills with an older
+full-copy recipe get a repo version generated from it, preferred over the global version.
+Global skills (no recipe) are copied as they are. Skills you don't add stay global.
 
 Anywhere:
   update             pull the preset repo, refresh your home and every project on this machine
@@ -64,9 +68,21 @@ PROJECT_OVERRIDES="$ROOT/.agents/overrides"   # user-owned runtime controls, nev
 SKILL_FIELDS="name description license compatibility metadata"
 RUNTIME_CONTROLS="allowed-tools disallowed-tools context agent model effort"
 DRY_RUN=""   # set by --dry-run: apply() reports instead of writing
-# This machine's projects that use the preset, one path per line, for `agents update`.
+# This machine's checkouts that use the preset, one path per line, for `agents update`.
 # Machine-local, so it lives outside the repo next to the user's own local files.
-PROJECTS="$HOME/.agents/local/projects"
+CHECKOUTS="$HOME/.agents/local/checkouts"
+OLD_CHECKOUTS="$HOME/.agents/local/projects"   # the list's name before the project store took the folder
+EXCLUDE_START="# agents-preset:start"
+EXCLUDE_END="# agents-preset:end"
+PROJECT_FILE="$ROOT/.agents/project"
+PROJECT_NAME_ARG="" PROJECT_STORE_ARG=""   # --project and --store
+PROJECT_NAME="" PROJECT_STORE="" PROJECT_DIR=""   # resolve_project
+COMPOSED_FILE="$ROOT/.agents/composed.txt"       # the skills agents composed, so it can remove them
+SETTINGS_SUM="$ROOT/.agents/settings.sum"        # checksum of the settings file agents wrote
+SETTINGS_FILE=".claude/settings.local.json"
+COMPOSE_TMP=""
+declare -A SPECIFICS=() COMPOSED=()   # item -> 1 (has a specifics recipe) / item -> its composed output
+declare -a TRACKED=()                 # files of the checkout that the repository tracks
 
 require_project() {
   [ "$ROOT" != "$AGENTS_DIR" ] || die "run this inside a project, not the preset repo"
@@ -76,7 +92,9 @@ available() {
   local kind entry
   for kind in $KINDS; do
     for entry in "$SRC/$kind"/*; do
-      [ "$(basename "$entry")" = "INDEX.md" ] || echo "$kind/$(basename "$entry")"
+      # INDEX.md is the folder's index; agents/recipes/ holds the subagents' recipes.
+      case "$kind/$(basename "$entry")" in */INDEX.md|agents/recipes) continue ;; esac
+      echo "$kind/$(basename "$entry")"
     done
   done
 }
@@ -116,6 +134,7 @@ resolve() {
     */*) in_list "${want%%/*}" $KINDS || die "unknown kind in $1 (one of: $KINDS)" ;;
     *) die "invalid item: $1 (expected <kind>/<name>, see: agents list)" ;;
   esac
+  [ "$want" != agents/recipes ] || die "unknown item: $1 (see: agents list)"
   if [ -e "$SRC/$want" ]; then echo "$want"
   elif [ -e "$SRC/$want.md" ]; then echo "$want.md"
   else die "unknown item: $1 (see: agents list)"
@@ -132,15 +151,18 @@ targets() {
       # Repo version: the recipe, plus a Claude Code mirror of the generated
       # .agents/skills/<n>/ (which Codex and Copilot read directly).
       # A global skill is copied there as it is, then mirrored the same way.
+      # A skill with a specifics recipe and a level file gets its composed instance there.
       n="$(basename "$item")"
       if is_global_skill "$item"; then
         printf 'copy\t.agents/skills/%s\n' "$n"
       else
         printf 'recipe\t.agents/recipes/skills/%s.md\n' "$n"
+        [ -z "${COMPOSED[$item]-}" ] || printf 'copy\t.agents/skills/%s\n' "$n"
       fi
       printf 'mirror\t.claude/skills/%s\n' "$n" ;;
     agents/*)
       n="$(basename "$item" .md)"
+      [ ! -f "$SRC/agents/recipes/$n.md" ] || printf 'recipe\t.agents/recipes/agents/%s.md\n' "$n"
       printf 'copy\t.claude/agents/%s.md\n' "$n"
       printf 'copy\t.github/agents/%s.agent.md\n' "$n"
       printf 'codex-agent\t.codex/agents/%s.toml\n' "$n" ;;
@@ -152,9 +174,13 @@ targets() {
 # What a target is produced from.
 item_source() {
   case "$1" in
-    recipe) echo "$SRC/$2/GENERATE.md" ;;
+    recipe)
+      case "$2" in
+        agents/*) echo "$SRC/agents/recipes/$(basename "$2")" ;;
+        *)        echo "$SRC/$2/GENERATE.md" ;;
+      esac ;;
     mirror) echo "$ROOT/.agents/skills/$(basename "$2")" ;;
-    *)      echo "$SRC/$2" ;;
+    *)      echo "${COMPOSED[$2]:-$SRC/$2}" ;;
   esac
 }
 
@@ -185,6 +211,12 @@ remove_path() {
   while [ "$dir" != "." ] && rmdir "$ROOT/$dir" 2>/dev/null; do dir="$(dirname "$dir")"; done
 }
 
+# Removes one of agents' own state files, unless the repository tracks it: that one stays
+# (scan_tracked warned, with the command that stops tracking it).
+remove_state() {
+  tracked_under "$1" || remove_path "$1"
+}
+
 copy_item() {
   local item="$1" src mode path changed=""
   if [ ! -e "$SRC/$item" ]; then echo "missing $item (gone from the preset, local copies kept)"; return; fi
@@ -196,6 +228,8 @@ copy_item() {
       echo "warning: $item is a global skill now - delete .agents/recipes/skills/${item#skills/}.md (and .agents/skills/${item#skills/}/ if it was generated) to get the global copy" >&2
       continue
     fi
+    # The repository tracks this path (warned about in apply): never change it.
+    ! tracked_under "$path" || continue
     up_to_date "$mode" "$src" "$ROOT/$path" && continue
     changed=1
     [ -z "$DRY_RUN" ] || continue
@@ -237,55 +271,568 @@ summary() {
   echo "$s"
 }
 
-# Replaces the managed block in a file with $2 (removes it if $2 is empty).
-# Content outside the block is never touched; a file left empty is deleted.
-set_block() {
-  local file="$1" content="$2" tmp
+# Replaces the managed block between two marker lines in a file with $4 (removes the block
+# if $4 is empty). Content outside the block is never touched (blank lines in front of the block
+# are the block's own); a file left empty is deleted, or emptied if $5 is "keep". A file whose
+# markers aren't exactly one start line followed by one end line is left alone, with a warning:
+# a hand-edited file must not lose the lines after a marker that lost its partner.
+replace_block() {
+  local file="$1" start="$2" end="$3" content="$4" keep="${5:-}" tmp
   tmp="$(mktemp)"
   if [ -f "$file" ]; then
-    # Drop the old block and any trailing blank lines.
-    awk -v s="$START_MARK" -v e="$END_MARK" '
+    if ! awk -v s="$start" -v e="$end" '
       { l = $0; sub(/\r$/, "", l) }
-      l == s { skip = 1; next }
-      l == e { skip = 0; next }
+      l == s { ns++; if (!sl) sl = NR; skip = 1; blank = 0; next }
+      l == e { ne++; if (!el) el = NR; skip = 0; next }
       skip { next }
       l ~ /^[[:space:]]*$/ { blank++; next }
       { while (blank > 0) { print ""; blank-- } print }
-    ' "$file" > "$tmp"
+      END {
+        while (blank > 0) { print ""; blank-- }
+        if (ns != ne || ns > 1 || (ns == 1 && sl > el)) exit 3
+      }
+    ' "$file" > "$tmp"; then
+      echo "warning: ${file#"$ROOT"/} has a block marker without its partner (or more than one block) - left as it is; fix the markers by hand" >&2
+      rm -f "$tmp"
+      return 0
+    fi
   fi
   if [ -n "$content" ]; then
     {
-      [ -s "$tmp" ] && echo
-      echo "$START_MARK"
+      # One blank line before the block, unless the file already ends with one.
+      if [ -s "$tmp" ] && [ -n "$(tail -n 1 "$tmp" | tr -d '[:space:]')" ]; then echo; fi
+      echo "$start"
       printf '%s\n' "$content"
-      echo "$END_MARK"
+      echo "$end"
     } >> "$tmp"
   fi
 
   if [ -s "$tmp" ]; then
     if [ ! -f "$file" ] || ! cmp -s "$tmp" "$file"; then
+      mkdir -p "$(dirname "$file")"
       cp "$tmp" "$file"
       echo "updated ${file#"$ROOT"/}"
     fi
   elif [ -f "$file" ]; then
-    rm "$file"
-    echo "removed ${file#"$ROOT"/} (was empty)"
+    if [ -n "$keep" ]; then
+      if [ -s "$file" ]; then : > "$file"; echo "updated ${file#"$ROOT"/}"; fi
+    else
+      rm "$file"
+      echo "removed ${file#"$ROOT"/} (was empty)"
+    fi
   fi
   rm -f "$tmp"
 }
 
+set_block() { replace_block "$1" "$START_MARK" "$END_MARK" "$2"; }
+
+# True if the file holds the managed block.
+has_block() { [ -f "$1" ] && grep -qF "$START_MARK" "$1"; }
+
+# True if the file imports AGENTS.md on its own, outside the managed block.
+imports_agents() {
+  [ -f "$1" ] && awk -v s="$START_MARK" -v e="$END_MARK" '
+    { sub(/\r$/, "") } $0 == s { skip = 1 } !skip && /^@(\.\.\/)?AGENTS\.md/ { found = 1 } $0 == e { skip = 0 }
+    END { exit !found }' "$1"
+}
+
+# True if the repository tracks the path (a file, or a folder with tracked files in it).
+tracked_under() {
+  local f
+  for f in ${TRACKED[@]+"${TRACKED[@]}"}; do
+    [ "$f" = "$1" ] && return 0
+    case "$f" in "$1"/*) return 0 ;; esac
+  done
+  return 1
+}
+
+# set_block for a file of the checkout, unless the repository tracks it: a tracked file is never
+# changed, and a managed block found in it is only reported.
+write_managed() {
+  local rel="$1" content="$2"
+  if tracked_under "$rel"; then
+    if has_block "$ROOT/$rel"; then
+      echo "warning: $rel is tracked by this repository and holds the preset block - remove the block and commit, or keep it" >&2
+    fi
+    return 0
+  fi
+  set_block "$ROOT/$rel" "$content"
+}
+
+# Finds what the repository tracks of what agents writes (one git call) into TRACKED, and
+# warns, with the command that stops tracking it, for every preset path that is tracked.
+# Arguments: the items (old and new) whose targets count.
+scan_tracked() {
+  TRACKED=()
+  git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  local -a state=(.agents/preset.txt .agents/project .agents/composed.txt .agents/settings.sum .agents/levels)
+  local -a specs=(AGENTS.md CLAUDE.md .claude/CLAUDE.md CLAUDE.local.md "$SETTINGS_FILE" .agents "${state[@]}") paths=()
+  local item mode path f
+  for item in "$@"; do
+    while IFS=$'\t' read -r mode path; do
+      in_list "$path" ${paths[@]+"${paths[@]}"} || paths+=("$path")
+    done < <(targets "$item")
+  done
+  [ ${#paths[@]} -eq 0 ] || specs+=("${paths[@]}")
+  while IFS= read -r -d '' f; do TRACKED+=("$f"); done \
+    < <(git --literal-pathspecs -C "$ROOT" ls-files -z -- "${specs[@]}" 2>/dev/null)
+  [ ${#TRACKED[@]} -gt 0 ] || return 0
+  for path in "${state[@]}"; do
+    ! tracked_under "$path" || echo "warning: $path is tracked by this repository (agents still updates it) - to stop tracking it: git rm -r --cached $path" >&2
+  done
+  for path in ${paths[@]+"${paths[@]}"}; do
+    ! tracked_under "$path" || echo "warning: $path is tracked by this repository, so agents leaves it as it is - to stop tracking it: git rm -r --cached $path" >&2
+  done
+}
+
+# Names a project: letters, digits, '.', '_' and '-', not starting with a dot.
+valid_project_name() { [[ "$1" =~ ^[A-Za-z0-9_-][A-Za-z0-9._-]*$ ]]; }
+
+# The name proposed for a checkout's project: the origin URL's last path segment without .git,
+# lowercased; the folder's name when there is no origin.
+default_project_name() {
+  local url name
+  url="$(git -C "$ROOT" config --get remote.origin.url 2>/dev/null)" || url=""
+  url="${url%/}"; url="${url%.git}"
+  name="${url##*[/:]}"
+  [ -n "$name" ] || name="${ROOT##*/}"
+  name="${name,,}"
+  name="${name//[^a-z0-9._-]/-}"
+  while [[ "$name" == .* ]]; do name="${name#.}"; done
+  [ -n "$name" ] || name=project
+  echo "$name"
+}
+
+# Sets PROJECT_NAME, PROJECT_STORE and PROJECT_DIR (the folder of the project level): from
+# --project/--store, else .agents/project, else the defaults. Writes nothing.
+resolve_project() {
+  local k v name="" store=""
+  if [ -f "$PROJECT_FILE" ]; then
+    while IFS='=' read -r k v || [ -n "$k" ]; do
+      v="${v%$'\r'}"
+      case "$k" in name) name="$v" ;; store) store="$v" ;; esac
+    done < "$PROJECT_FILE"
+  fi
+  [ -z "$PROJECT_NAME_ARG" ] || name="$PROJECT_NAME_ARG"
+  [ -z "$PROJECT_STORE_ARG" ] || store="$PROJECT_STORE_ARG"
+  [ -n "$name" ] || name="$(default_project_name)"
+  [ -n "$store" ] || store=machine
+  if ! valid_project_name "$name"; then
+    echo "warning: .agents/project has an invalid project name \"$name\" - project levels are skipped until it's fixed" >&2
+    name=""
+  fi
+  case "$store" in
+    machine|agents) ;;
+    *) echo "warning: .agents/project has an unknown store \"$store\" (machine or agents) - using machine" >&2; store=machine ;;
+  esac
+  PROJECT_NAME="$name"; PROJECT_STORE="$store"; PROJECT_DIR=""
+  [ -n "$name" ] || return 0
+  case "$store" in
+    agents) PROJECT_DIR="$AGENTS_DIR/projects/$name" ;;
+    *)      PROJECT_DIR="$HOME/.agents/local/projects/$name" ;;
+  esac
+}
+
+# Records the project in .agents/project when that differs from what's there.
+write_project() {
+  [ -n "$PROJECT_NAME" ] || return 0
+  local new
+  new="$(printf 'name=%s\nstore=%s' "$PROJECT_NAME" "$PROJECT_STORE")"
+  if [ -f "$PROJECT_FILE" ] && [ "$new" = "$(sed 's/\r$//' "$PROJECT_FILE")" ]; then return 0; fi
+  mkdir -p "$ROOT/.agents"
+  printf '%s\n' "$new" > "$PROJECT_FILE"
+  echo "project $PROJECT_NAME (store: $PROJECT_STORE)"
+}
+
+# Where the project level is, as the AGENTS.md block shows it.
+project_dir_label() {
+  if [ -z "$PROJECT_NAME" ]; then echo "<the project store>"
+  elif [ "$PROJECT_STORE" = agents ]; then echo "$PROJECT_DIR"
+  else echo "~/.agents/local/projects/$PROJECT_NAME"
+  fi
+}
+
+# The level file of an item, relative to a level's folder: skills/<n>.md or agents/<n>.md.
+level_name() {
+  case "$1" in *.md) echo "$1" ;; *) echo "$1.md" ;; esac
+}
+
+# A level file without its "Removed from the core" section. The section's entries are
+# appended to the file $2, one per line: title, core text, replacement, whether there is a
+# Replacement line, number of cases and whether the Review line says "agreed", all
+# separated by the control character 0x1f.
+level_text() {
+  awk -v ents="$2" '
+    function flush() {
+      if (have) printf "%s\037%s\037%s\037%d\037%d\037%d\n", title, ctext, repl, hasrepl, ncases, ok >> ents
+      have = 0; title = ""; ctext = ""; repl = ""; hasrepl = 0; ncases = 0; ok = 0; incases = 0
+    }
+    # The text between the first and the last quote on the line. A value whose closing quote
+    # is missing (it continues on the next line) sets qbad: the caller then refuses the entry.
+    function quoted(s,   i, a) {
+      qbad = 0
+      a = index(s, "\"")
+      if (!a) { if (s !~ /^[ \t]*$/) qbad = 1; return "" }
+      s = substr(s, a + 1)
+      for (i = length(s); i > 0; i--) if (substr(s, i, 1) == "\"") return substr(s, 1, i - 1)
+      qbad = 1
+      return ""
+    }
+    { sub(/\r$/, "") }
+    /^## / {
+      if (insec) { flush(); insec = 0 }
+      if ($0 ~ /^## Removed from the core[ \t]*$/) { insec = 1; next }
+    }
+    insec {
+      if ($0 ~ /^### /) { flush(); have = 1; title = substr($0, 5); sub(/[ \t]+$/, "", title); next }
+      if (!have) next
+      if ($0 ~ /^Core text:/) { ctext = quoted(substr($0, 11)); incases = 0; next }
+      if ($0 ~ /^Replacement:/) { repl = quoted(substr($0, 13)); hasrepl = !qbad; incases = 0; next }
+      if ($0 ~ /^Cases:/) { incases = 1; next }
+      if ($0 ~ /^Review:/) { incases = 0; if (tolower($0) ~ /,[ \t]*agreed[ \t]*:/) ok = 1; next }
+      if (incases && $0 ~ /^[ \t]*[0-9]+\.[ \t]+[^ \t]/) ncases++
+      next
+    }
+    { print }
+    END { if (insec) flush() }
+  ' "$1"
+}
+
+# The core file without its "Repo version first" notice (the line and the blank line after it).
+core_text() {
+  awk '
+    { sub(/\r$/, "") }
+    index($0, "> **Repo version first:**") == 1 { skipblank = 1; next }
+    skipblank && $0 == "" { skipblank = 0; next }
+    { skipblank = 0; print }
+  ' "$1"
+}
+
+# Warns about a level file that looks like a whole skill or subagent: a level is plain Markdown,
+# with no frontmatter and no "Repo version first" notice (the composed file has both already).
+check_level_file() {
+  local item="$1" file="$2" first=""
+  IFS= read -r first < "$file" || true
+  first="${first%$'\r'}"
+  if [ "$first" = "---" ]; then
+    echo "warning: $item: $file starts with frontmatter ('---') - a level is plain Markdown without it; the composed file has its own" >&2
+  fi
+  if grep -qF "> **Repo version first:**" "$file"; then
+    echo "warning: $item: $file holds the \"Repo version first\" notice - leave it out of a level" >&2
+  fi
+}
+
+# Composes the instance of a tailored item from its core and its level files ($2 the project's,
+# $3 the checkout's; either may be empty) into COMPOSE_TMP, and records it in COMPOSED:
+# the core, "## In this project", "## In this checkout" and a closing sentence. A removal in a
+# level applies only when it passes the gate (docs/model.md): core text found exactly once in
+# the core (the pristine one: an earlier removal's replacement never counts), three cases and an
+# agreed review. Otherwise the core text stays and a warning says why. Two removals that overlap
+# in the core can't both apply: the later one is refused. A level with no text of its own and no
+# removal that applied composes nothing, so the item stays the core.
+compose_item() {
+  local item="$1" proj="$2" chk="$3" n core out target body ents ptext="" ctext_level=""
+  local title text repl hasrepl ncases ok reason count rest prefix pos len i j end cursor tmp
+  local -a apos=() alen=() arepl=() order=()
+  case "$item" in
+    skills/*) n="${item#skills/}"; core="$SRC/$item/SKILL.md"; out="$COMPOSE_TMP/skills/$n" ;;
+    *)        n="$(basename "$item" .md)"; core="$SRC/$item"; out="$COMPOSE_TMP/agents/$n.md" ;;
+  esac
+  [ -f "$core" ] || return 0
+  ents="$COMPOSE_TMP/removals.txt"
+  : > "$ents"
+  body="$(core_text "$core")"
+  if [ -n "$proj" ]; then check_level_file "$item" "$proj"; ptext="$(level_text "$proj" "$ents")"; fi
+  if [ -n "$chk" ]; then check_level_file "$item" "$chk"; ctext_level="$(level_text "$chk" "$ents")"; fi
+  [[ "$ptext" =~ [^[:space:]] ]] || ptext=""
+  [[ "$ctext_level" =~ [^[:space:]] ]] || ctext_level=""
+  while IFS=$'\037' read -r title text repl hasrepl ncases ok; do
+    reason=""
+    if [ -z "$text" ]; then reason="it has no Core text, or the quoted text isn't on one line (both quotes must be on the Core text line)"
+    elif [ "$hasrepl" != 1 ]; then reason="it has no Replacement line, or the quoted text isn't on one line"
+    elif [ "$ncases" -lt 3 ]; then reason="it needs at least 3 cases, it has $ncases"
+    elif [ "$ok" != 1 ]; then reason='its Review line has no "agreed" verdict'
+    else
+      count=0; rest="$body"
+      while [[ "$rest" == *"$text"* ]]; do count=$((count + 1)); rest="${rest#*"$text"}"; done
+      if [ "$count" -eq 0 ]; then reason="its core text is not in the core (did the core change?)"
+      elif [ "$count" -gt 1 ]; then reason="its core text occurs $count times in the core, it must occur exactly once"
+      else
+        prefix="${body%%"$text"*}"; pos=${#prefix}; len=${#text}
+        for ((i = 0; i < ${#apos[@]}; i++)); do
+          if [ "$pos" -lt $((apos[i] + alen[i])) ] && [ "${apos[i]}" -lt $((pos + len)) ]; then
+            reason="its core text overlaps the text of an earlier removal"; break
+          fi
+        done
+        if [ -z "$reason" ]; then apos+=("$pos"); alen+=("$len"); arepl+=("$repl"); fi
+      fi
+    fi
+    [ -z "$reason" ] || echo "warning: $item: removal \"$title\" not applied: $reason" >&2
+  done < "$ents"
+  rm -f "$ents"
+  # Nothing to add and nothing removed: the item stays the core.
+  [ -n "$ptext$ctext_level" ] || [ ${#apos[@]} -gt 0 ] || return 0
+  # Splice the accepted removals into the pristine core, in the order they stand in it.
+  order=("${!apos[@]}")
+  for ((i = 0; i < ${#order[@]}; i++)); do
+    for ((j = i + 1; j < ${#order[@]}; j++)); do
+      if [ "${apos[${order[j]}]}" -lt "${apos[${order[i]}]}" ]; then tmp="${order[i]}"; order[i]="${order[j]}"; order[j]="$tmp"; fi
+    done
+  done
+  cursor=0; end=""
+  for i in ${order[@]+"${order[@]}"}; do
+    end+="${body:cursor:apos[i]-cursor}${arepl[i]}"
+    cursor=$((apos[i] + alen[i]))
+  done
+  body="$end${body:cursor}"
+  case "$item" in
+    skills/*)
+      mkdir -p "$out"
+      cp -R "$SRC/$item/." "$out/"
+      rm -f "$out/GENERATE.md"
+      target="$out/SKILL.md" ;;
+    *)
+      mkdir -p "$COMPOSE_TMP/agents"
+      target="$out" ;;
+  esac
+  {
+    printf '%s\n' "$body"
+    [ -z "$ptext" ] || printf '\n## In this project\n\n%s\n' "$ptext"
+    [ -z "$ctext_level" ] || printf '\n## In this checkout\n\n%s\n' "$ctext_level"
+    [ -z "$ptext$ctext_level" ] || printf '\nWhere the sections above disagree, the more specific one wins: the checkout over the project, and the project over the core.\n'
+  } > "$target"
+  COMPOSED[$item]="$out"
+}
+
+# Notes whether a skill or subagent has a specifics recipe (SPECIFICS) and, if it has a level
+# file, composes it (COMPOSED). Runs in the main shell: targets() and item_source() read both.
+prepare_item() {
+  local item="$1" recipe level proj="" chk=""
+  case "$item" in
+    skills/*) recipe="$SRC/$item/GENERATE.md" ;;
+    agents/*) recipe="$SRC/agents/recipes/$(basename "$item")" ;;
+    *) return 0 ;;
+  esac
+  [ -f "$recipe" ] || return 0
+  [ "$(frontmatter "$recipe" output)" = specifics ] || return 0
+  SPECIFICS[$item]=1
+  level="$(level_name "$item")"
+  [ -z "$PROJECT_DIR" ] || [ ! -f "$PROJECT_DIR/$level" ] || proj="$PROJECT_DIR/$level"
+  [ ! -f "$ROOT/.agents/levels/$level" ] || chk="$ROOT/.agents/levels/$level"
+  [ -n "$proj$chk" ] || return 0
+  compose_item "$item" "$proj" "$chk"
+}
+
+# The JSON tool for settings: node, else a working python3 or python. AGENTS_JSON_TOOL (node,
+# python3 or python; the smoke tests use it) names the one to use, or one that doesn't exist.
+json_tool() {
+  local t
+  if [ -n "${AGENTS_JSON_TOOL-}" ]; then
+    case "$AGENTS_JSON_TOOL" in
+      node) command -v node >/dev/null 2>&1 && echo node ;;
+      python3|python) "$AGENTS_JSON_TOOL" -c 'import json' >/dev/null 2>&1 && echo "$AGENTS_JSON_TOOL" ;;
+      *) return 1 ;;
+    esac
+    return
+  fi
+  if command -v node >/dev/null 2>&1; then echo node; return 0; fi
+  for t in python3 python; do
+    if "$t" -c 'import json' >/dev/null 2>&1; then echo "$t"; return 0; fi
+  done
+  return 1
+}
+
+# A path as a native tool wants it (Windows programs don't read /c/... paths).
+native_path() {
+  if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi
+}
+
+# Prints the JSON objects in the files $2... merged in order: objects are merged key by key,
+# arrays concatenated without duplicates, any other value replaced by the later one.
+merge_json() {
+  local tool="$1" f; shift
+  local -a native=()
+  for f in "$@"; do native+=("$(native_path "$f")"); done
+  case "$tool" in
+    node)
+      node -e '
+        const fs = require("fs");
+        function merge(a, b) {
+          if (Array.isArray(a) && Array.isArray(b)) {
+            const r = [];
+            for (const x of a.concat(b)) if (!r.some(y => JSON.stringify(y) === JSON.stringify(x))) r.push(x);
+            return r;
+          }
+          if (a && b && typeof a === "object" && typeof b === "object" && !Array.isArray(a) && !Array.isArray(b)) {
+            const r = Object.assign({}, a);
+            for (const k of Object.keys(b)) r[k] = k in a ? merge(a[k], b[k]) : b[k];
+            return r;
+          }
+          return b;
+        }
+        let out = {};
+        for (const f of process.argv.slice(1)) {
+          const o = JSON.parse(fs.readFileSync(f, "utf8").replace(/^﻿/, ""));
+          if (!o || typeof o !== "object" || Array.isArray(o)) throw new Error(f + ": not a JSON object");
+          out = merge(out, o);
+        }
+        process.stdout.write(JSON.stringify(out, null, 2) + "\n");
+      ' "${native[@]}" ;;
+    *)
+      "$tool" -c '
+import json, sys
+def merge(a, b):
+    if isinstance(a, list) and isinstance(b, list):
+        r = []
+        for x in a + b:
+            if x not in r:
+                r.append(x)
+        return r
+    if isinstance(a, dict) and isinstance(b, dict):
+        r = dict(a)
+        for k, v in b.items():
+            r[k] = merge(a[k], v) if k in a else v
+        return r
+    return b
+out = {}
+for f in sys.argv[1:]:
+    with open(f, encoding="utf-8-sig") as h:
+        o = json.load(h)
+    if not isinstance(o, dict):
+        raise SystemExit(f + ": not a JSON object")
+    out = merge(out, o)
+sys.stdout.write(json.dumps(out, indent=2) + "\n")
+' "${native[@]}" ;;
+  esac | tr -d '\r'
+}
+
+# Writes the settings the levels carry (settings/claude.json in the project level, then in the
+# checkout level) merged into .claude/settings.local.json, when that file is absent or was
+# written by agents (its checksum is in .agents/settings.sum). Otherwise warns and prints what
+# to add by hand. $1 is "carry" while the checkout uses the preset; without it, or when no level
+# carries settings, a settings file agents wrote is removed.
+sync_settings() {
+  local carry="$1" dst="$ROOT/$SETTINGS_FILE" proj="" chk="" managed="" tool merged
+  [ -z "$PROJECT_DIR" ] || [ ! -f "$PROJECT_DIR/settings/claude.json" ] || proj="$PROJECT_DIR/settings/claude.json"
+  [ ! -f "$ROOT/.agents/levels/settings/claude.json" ] || chk="$ROOT/.agents/levels/settings/claude.json"
+  if [ -f "$SETTINGS_SUM" ] && [ -f "$dst" ] && [ "$(cksum < "$dst")" = "$(tr -d '\r' < "$SETTINGS_SUM")" ]; then
+    managed=1
+  fi
+  if [ "$carry" != carry ] || [ -z "$proj$chk" ]; then
+    if [ -n "$managed" ] && ! tracked_under "$SETTINGS_FILE"; then
+      remove_path "$SETTINGS_FILE"
+      echo "removed $SETTINGS_FILE (no level carries settings any more)"
+    fi
+    [ ! -f "$SETTINGS_SUM" ] || remove_state "${SETTINGS_SUM#"$ROOT"/}"
+    return 0
+  fi
+  if ! tool="$(json_tool)"; then
+    echo "warning: settings in a level are skipped - neither node nor python was found to merge them" >&2
+    return 0
+  fi
+  if ! merged="$(merge_json "$tool" ${proj:+"$proj"} ${chk:+"$chk"})"; then
+    echo "warning: settings in a level are skipped - couldn't merge ${proj:+$proj }${chk:+$chk}(is it a JSON object?)" >&2
+    return 0
+  fi
+  if tracked_under "$SETTINGS_FILE" || { [ -e "$dst" ] && [ -z "$managed" ]; }; then
+    echo "warning: $SETTINGS_FILE exists and was not written by agents - left as it is. Add this to it by hand:" >&2
+    printf '%s\n' "$merged" >&2
+    return 0
+  fi
+  if [ -f "$dst" ] && [ "$merged" = "$(tr -d '\r' < "$dst")" ]; then return 0; fi
+  mkdir -p "$(dirname "$dst")" "$ROOT/.agents"
+  printf '%s\n' "$merged" > "$dst"
+  cksum < "$dst" > "$SETTINGS_SUM"
+  echo "updated $SETTINGS_FILE"
+}
+
+# Rewrites the managed block of the checkout's git exclude file (the file `git rev-parse
+# --git-path info/exclude` names) with the paths agents wrote for the given items. Lines outside
+# the block are never changed. Not a git repository: nothing.
+# - `.agents/` is excluded as a whole, unless the repository tracks files in it: then only the
+#   paths agents wrote there are listed, so the owner's own new files stay visible.
+# - With no item left the block goes, unless `.agents/` still holds files that are the owner's
+#   (levels, overrides, a kept generated skill): those stay hidden.
+# - Linked worktrees share one exclude file. Each checkout records its own lines in
+#   <its git dir>/agents-exclude, and the block lists the union of all of them, so a change in one
+#   worktree never un-hides what another one needs.
+update_exclude() {
+  git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  local file gitdir common lines="" item mode path f union="" whole=""
+  local -a ids=()
+  while IFS= read -r f; do ids+=("$f"); done < <(git -C "$ROOT" rev-parse --git-path info/exclude --git-dir --git-common-dir 2>/dev/null)
+  [ ${#ids[@]} -eq 3 ] || return 0
+  file="${ids[0]}"; gitdir="${ids[1]}"; common="${ids[2]}"
+  for f in file gitdir common; do
+    case "${!f}" in /*|[A-Za-z]:*) ;; *) printf -v "$f" '%s' "$ROOT/${!f}" ;; esac
+  done
+  if [ $# -gt 0 ]; then
+    if ! tracked_under .agents; then
+      whole=1
+      lines="/.agents/"
+    else
+      for f in preset.txt project composed.txt settings.sum levels; do
+        tracked_under ".agents/$f" || lines+=$'\n'"/.agents/$f"
+      done
+    fi
+    for item in "$@"; do
+      case "$item" in skills/*) [ -n "$whole" ] || is_global_skill "$item" || lines+=$'\n'"/.agents/skills/${item#skills/}/" ;; esac
+      while IFS=$'\t' read -r mode path; do
+        case "$path" in
+          .agents/*) [ -n "$whole" ] || tracked_under "$path" || lines+=$'\n'"/$path"; continue ;;
+        esac
+        if [ -e "$ROOT/$path" ] && ! tracked_under "$path"; then lines+=$'\n'"/$path"; fi
+      done < <(targets "$item")
+    done
+    for f in AGENTS.md CLAUDE.md .claude/CLAUDE.md CLAUDE.local.md; do
+      if has_block "$ROOT/$f" && ! tracked_under "$f"; then lines+=$'\n'"/$f"; fi
+    done
+    if [ -f "$SETTINGS_SUM" ] && [ -f "$ROOT/$SETTINGS_FILE" ] && ! tracked_under "$SETTINGS_FILE"; then
+      lines+=$'\n'"/$SETTINGS_FILE"
+    fi
+  elif [ -d "$ROOT/.agents" ]; then
+    if ! tracked_under .agents; then lines="/.agents/"
+    elif [ -e "$ROOT/.agents/levels" ] && ! tracked_under .agents/levels; then lines="/.agents/levels/"
+    fi
+  fi
+  lines="${lines#$'\n'}"
+  if [ -n "$lines" ]; then
+    printf '%s\n' "$lines" > "$gitdir/agents-exclude"
+  else
+    rm -f "$gitdir/agents-exclude"
+  fi
+  for f in "$common/agents-exclude" "$common"/worktrees/*/agents-exclude; do
+    if [ -f "$f" ]; then union+="$(tr -d '\r' < "$f")"$'\n'; fi
+  done
+  union="$(printf '%s' "$union" | sed '/^$/d' | LC_ALL=C sort -u)"
+  replace_block "$file" "$EXCLUDE_START" "$EXCLUDE_END" "$union" keep
+}
+
 # Lists the copied concepts/references in AGENTS.md (read by Codex and Copilot)
 # and makes CLAUDE.md import it for Claude Code. Skills, agents and commands are
-# discovered by each tool on its own.
+# discovered by each tool on its own. Nothing is written into a file the repository
+# tracks: the block goes into CLAUDE.local.md instead.
 update_instructions() {
-  local item path desc n concepts="" references="" skills="" block="" claude import
+  local item path desc n concepts="" references="" skills="" tailored="" block="" claude import="" need_import="" local_content=""
+  local store
+  store="$(project_dir_label)"
   for item in "$@"; do
     case "$item" in
       skills/*)
         # Global skills are the same everywhere, so precedence doesn't matter.
         is_global_skill "$item" && continue
         n="$(basename "$item")"
-        skills+="- \`$n\`: \`.agents/skills/$n/\` (recipe: \`.agents/recipes/skills/$n.md\`)"$'\n'
+        if [ -n "${SPECIFICS[$item]-}" ]; then
+          tailored+="- skill \`$n\`: recipe \`.agents/recipes/skills/$n.md\`, project level \`$store/skills/$n.md\`, checkout level \`.agents/levels/skills/$n.md\`"$'\n'
+        else
+          skills+="- \`$n\`: \`.agents/skills/$n/\` (recipe: \`.agents/recipes/skills/$n.md\`)"$'\n'
+        fi
+        continue ;;
+      agents/*)
+        n="$(basename "$item" .md)"
+        if [ -n "${SPECIFICS[$item]-}" ]; then
+          tailored+="- subagent \`$n\`: recipe \`.agents/recipes/agents/$n.md\`, project level \`$store/agents/$n.md\`, checkout level \`.agents/levels/agents/$n.md\`"$'\n'
+        fi
         continue ;;
     esac
     path=".agents/$item"
@@ -301,6 +848,9 @@ update_instructions() {
   if [ -n "$concepts" ]; then
     block+=$'\n'"**Concepts** are rules for AI agents in this project: how agent instructions (AGENTS.md, CLAUDE.md, skills, subagents, commands, hooks) are written, and how agents work. Each description says when it applies; follow it then, and open the concept for the details:"$'\n\n'"$concepts"
   fi
+  if [ -n "$tailored" ]; then
+    block+=$'\n'"**Tailored skills and subagents**: each is its core, installed as usual, plus levels that \`agents sync\` composes into the file your tool reads (the core, then \`## In this project\`, then \`## In this checkout\`; where they disagree the more specific one wins). If a level is missing, generate it from the item's recipe the first time the item applies, then run \`agents sync\`. Write only the specifics, never the core. The project level goes into the project store; write the checkout level only when this checkout's role needs one (see the repo-checkout-roles concept) and only after the user agrees:"$'\n\n'"$tailored"
+  fi
   if [ -n "$skills" ]; then
     block+=$'\n'"**Repo-tailored skills**: these skills have a version tailored to this repository, and it always takes precedence over a global skill with the same name. If a repo version doesn't exist yet, generate it from its recipe the first time the skill applies, then run \`agents sync\`:"$'\n\n'"$skills"
   fi
@@ -308,40 +858,81 @@ update_instructions() {
     block+=$'\n'"**References**: follow each one's description; read the file when it applies:"$'\n\n'"$references"
   fi
   [ -z "$block" ] || block="## Preset knowledge"$'\n\n'"Managed by \`agents\` - edits inside this block are overwritten."$'\n'"${block%$'\n'}"
-  set_block "$ROOT/AGENTS.md" "$block"
 
   if [ -f "$ROOT/.claude/CLAUDE.md" ] && [ ! -f "$ROOT/CLAUDE.md" ]; then
-    claude="$ROOT/.claude/CLAUDE.md"; import="@../AGENTS.md"
+    claude=".claude/CLAUDE.md"; import="@../AGENTS.md"
   else
-    claude="$ROOT/CLAUDE.md"; import="@AGENTS.md"
+    claude="CLAUDE.md"; import="@AGENTS.md"
   fi
-  # Skip if CLAUDE.md already imports AGENTS.md on its own.
-  if [ -f "$claude" ] && awk -v s="$START_MARK" -v e="$END_MARK" '
-      { sub(/\r$/, "") } $0 == s { skip = 1 } !skip && /^@(\.\.\/)?AGENTS\.md/ { found = 1 } $0 == e { skip = 0 }
-      END { exit !found }' "$claude"; then
-    import=""
+  # Is there an own CLAUDE.md that imports AGENTS.md already?
+  if [ -n "$block" ] && ! imports_agents "$ROOT/CLAUDE.md" && ! imports_agents "$ROOT/.claude/CLAUDE.md"; then
+    need_import=1
   fi
-  [ -n "$block" ] || import=""
-  set_block "$claude" "$import"
+  if tracked_under AGENTS.md; then
+    # The tracked AGENTS.md stays as it is; Claude Code reads CLAUDE.local.md, which imports it.
+    local_content="$block"
+    [ -z "$need_import" ] || local_content="@AGENTS.md"$'\n\n'"$block"
+    write_managed AGENTS.md ""
+    write_managed "$claude" ""
+    write_managed CLAUDE.local.md "$local_content"
+  else
+    write_managed AGENTS.md "$block"
+    if tracked_under "$claude"; then
+      write_managed "$claude" ""
+      write_managed CLAUDE.local.md "${need_import:+@AGENTS.md}"
+    else
+      write_managed "$claude" "${need_import:+$import}"
+      write_managed CLAUDE.local.md ""
+    fi
+  fi
 }
 
 # Makes the project match the given list of items.
 apply() {
-  local -a old=() keep=() hooks=() pending=()
-  local item mode path conflict
+  local -a old=() keep=() hooks=() pending=() missing=() old_composed=() sorted=()
+  local item mode path conflict n
   while IFS= read -r item; do old+=("$item"); done < <(selected)
+  if [ -f "$COMPOSED_FILE" ]; then
+    while IFS= read -r path; do [ -z "$path" ] || old_composed+=("${path%$'\r'}"); done < "$COMPOSED_FILE"
+  fi
+
+  # Before the project store is used: an old checkout list is a file called projects, which would be in its way.
+  [ -n "$DRY_RUN" ] || migrate_checkouts
+  resolve_project
+  if [ $# -gt 0 ] && [ -z "$DRY_RUN" ]; then write_project; fi
+  COMPOSE_TMP="$(mktemp -d)"
+  trap 'rm -rf "$COMPOSE_TMP"' EXIT
+  for item in "$@"; do prepare_item "$item"; done
+  scan_tracked ${old[@]+"${old[@]}"} "$@"
 
   for item in ${old[@]+"${old[@]}"}; do
     in_list "$item" "$@" && continue
     if [ -n "$DRY_RUN" ]; then echo "would remove $item"; continue; fi
-    while IFS=$'\t' read -r mode path; do remove_path "$path"; done < <(targets "$item")
+    while IFS=$'\t' read -r mode path; do
+      tracked_under "$path" || remove_path "$path"
+    done < <(targets "$item")
     echo "removed $item"
     case "$item" in
       skills/*)
-        is_global_skill "$item" || [ ! -d "$ROOT/.agents/skills/${item#skills/}" ] \
-          || echo "        kept .agents/skills/${item#skills/}/ (generated, owned by the project) - delete it to fall back to the global version" ;;
+        n="${item#skills/}"
+        if in_list ".agents/skills/$n" ${old_composed[@]+"${old_composed[@]}"}; then
+          tracked_under ".agents/skills/$n" || remove_path ".agents/skills/$n"
+        else
+          is_global_skill "$item" || [ ! -d "$ROOT/.agents/skills/$n" ] \
+            || echo "        kept .agents/skills/$n/ (generated, owned by the project) - delete it to fall back to the global version"
+        fi ;;
     esac
   done
+  # A skill composed earlier whose level files are gone: back to the core.
+  if [ -z "$DRY_RUN" ]; then
+    for path in ${old_composed[@]+"${old_composed[@]}"}; do
+      n="${path#.agents/skills/}"
+      in_list "skills/$n" "$@" || continue
+      [ -z "${COMPOSED[skills/$n]-}" ] || continue
+      tracked_under "$path" || remove_path "$path"
+      echo "removed $path (no level file left)"
+    done
+  fi
 
   for item in "$@"; do
     in_list "$item" ${keep[@]+"${keep[@]}"} && continue
@@ -355,14 +946,21 @@ apply() {
     [ -z "$DRY_RUN" ] || continue
     case "$item" in
       hooks/*) hooks+=("$item") ;;
-      skills/*)
-        is_global_skill "$item" || [ -f "$ROOT/.agents/skills/${item#skills/}/SKILL.md" ] || pending+=("${item#skills/}") ;;
+      skills/*|agents/*)
+        if [ -n "${SPECIFICS[$item]-}" ]; then
+          [ -n "${COMPOSED[$item]-}" ] || missing+=("$item")
+        else
+          case "$item" in
+            skills/*) is_global_skill "$item" || [ -f "$ROOT/.agents/skills/${item#skills/}/SKILL.md" ] || pending+=("${item#skills/}") ;;
+          esac
+        fi ;;
     esac
   done
 
   if [ -n "$DRY_RUN" ]; then
     echo
-    echo "Dry run: nothing was changed. The manifest and the AGENTS.md/CLAUDE.md blocks would be updated to match."
+    echo "Dry run: nothing was changed. The manifest, the AGENTS.md/CLAUDE.md blocks and the exclude block in .git/info/exclude would be updated to match."
+    rm -rf "$COMPOSE_TMP"
     return
   fi
 
@@ -372,18 +970,46 @@ apply() {
       echo "# Preset items used by this project. Managed by 'agents' (setup/add/remove/update)."
       printf '%s\n' "${keep[@]}" | sort -u
     } > "$MANIFEST"
-  elif [ -f "$MANIFEST" ]; then
-    remove_path "${MANIFEST#"$ROOT"/}"
+  else
+    # State files the repository tracks stay (scan_tracked warned); a tracked manifest is emptied.
+    for path in .agents/project "${COMPOSED_FILE#"$ROOT"/}"; do
+      [ ! -f "$ROOT/$path" ] || remove_state "$path"
+    done
+    if [ -f "$MANIFEST" ]; then
+      if tracked_under "${MANIFEST#"$ROOT"/}"; then
+        echo "# Preset items used by this project. Managed by 'agents' (setup/add/remove/update)." > "$MANIFEST"
+      else
+        remove_path "${MANIFEST#"$ROOT"/}"
+      fi
+    fi
+  fi
+  # The skills composed now, so a later sync can remove one whose level files are gone.
+  local -a composed_now=()
+  for item in ${keep[@]+"${keep[@]}"}; do
+    case "$item" in skills/*) [ -z "${COMPOSED[$item]-}" ] || composed_now+=(".agents/skills/${item#skills/}") ;; esac
+  done
+  if [ ${#composed_now[@]} -gt 0 ]; then
+    printf '%s\n' "${composed_now[@]}" | LC_ALL=C sort -u > "$COMPOSED_FILE"
+  elif [ -f "$COMPOSED_FILE" ]; then
+    remove_state "${COMPOSED_FILE#"$ROOT"/}"
   fi
   # Same order as the manifest, so the managed blocks don't churn.
-  local -a sorted=()
   while IFS= read -r item; do [ -n "$item" ] && sorted+=("$item"); done < <(printf '%s\n' ${keep[@]+"${keep[@]}"} | sort -u)
   update_instructions ${sorted[@]+"${sorted[@]}"}
+  sync_settings "$([ ${#keep[@]} -gt 0 ] && echo carry || echo none)"
+  update_exclude ${sorted[@]+"${sorted[@]}"}
+  rm -rf "$COMPOSE_TMP"
+  trap - EXIT
 
   if [ ${#pending[@]} -gt 0 ]; then
     echo
     echo "Repo versions not generated yet (the global version is used until then): ${pending[*]}"
     echo "Your agent generates each one the first time it's needed, or ask it now: \"generate the repo versions of our skills\"."
+  fi
+  if [ ${#missing[@]} -gt 0 ]; then
+    echo
+    echo "No level yet, so the core is used as it is: ${missing[*]}"
+    echo "Your agent writes the levels from each recipe the first time they're needed, or ask it now: \"write the levels of our tailored skills and subagents\"."
   fi
 
   if [ ${#hooks[@]} -gt 0 ]; then
@@ -392,13 +1018,30 @@ apply() {
     echo "  Claude Code: .claude/settings.json   Codex: .codex/hooks.json   Copilot: .github/hooks/*.json"
   fi
   # The project is set up either way; a list that can't be written only costs the next update.
-  remember_project || echo "warning: couldn't update the project list in $PROJECTS" >&2
+  remember_project || echo "warning: couldn't update the checkout list in $CHECKOUTS" >&2
+}
+
+# The list was called projects before the project store took that folder: move it, once.
+migrate_checkouts() {
+  [ -f "$OLD_CHECKOUTS" ] || return 0
+  if [ ! -e "$CHECKOUTS" ]; then
+    mv -f "$OLD_CHECKOUTS" "$CHECKOUTS" || echo "warning: couldn't move $OLD_CHECKOUTS to $CHECKOUTS" >&2
+    return 0
+  fi
+  # Both exist (a second profile, a hand-made list, the old agents run after the new one): join
+  # them, or the old file would keep the project store's folder from being created.
+  local merged
+  merged="$(cat "$OLD_CHECKOUTS" "$CHECKOUTS" | tr -d '\r' | sed '/^[[:space:]]*$/d' | LC_ALL=C sort -u)" \
+    && printf '%s\n' "$merged" > "$CHECKOUTS.tmp.$$" && mv -f "$CHECKOUTS.tmp.$$" "$CHECKOUTS" \
+    && rm -f "$OLD_CHECKOUTS" \
+    || echo "warning: couldn't join $OLD_CHECKOUTS into $CHECKOUTS - project levels can't be stored until the file $OLD_CHECKOUTS is gone" >&2
 }
 
 # The listed projects, without comments, blank lines, CRs, trailing spaces or trailing slashes.
 known_projects() {
-  [ -f "$PROJECTS" ] || return 0
-  sed -e 's/\r$//' -e 's/[[:space:]]*$//' -e 's#\(.\)/*$#\1#' -e '/^[[:space:]]*#/d' -e '/^$/d' "$PROJECTS"
+  migrate_checkouts
+  [ -f "$CHECKOUTS" ] || return 0
+  sed -e 's/\r$//' -e 's/[[:space:]]*$//' -e 's#\(.\)/*$#\1#' -e '/^[[:space:]]*#/d' -e '/^$/d' "$CHECKOUTS"
 }
 
 # A project folder as ROOT names it: the git top level (or the folder), without symlinks or /tmp aliases.
@@ -409,12 +1052,12 @@ project_root() {
 # Writes the project list, only when it changed, through a temporary file so a reader
 # never sees it half written. An empty list removes the file.
 write_projects() {
-  if [ $# -eq 0 ]; then rm -f "$PROJECTS"; return; fi
+  if [ $# -eq 0 ]; then rm -f "$CHECKOUTS"; return; fi
   local new
   new="$(printf '%s\n' "$@" | LC_ALL=C sort -u)"
-  if [ -f "$PROJECTS" ] && [ "$new" = "$(sed 's/\r$//' "$PROJECTS")" ]; then return; fi
-  mkdir -p "${PROJECTS%/*}"
-  printf '%s\n' "$new" > "$PROJECTS.tmp.$$" && mv -f "$PROJECTS.tmp.$$" "$PROJECTS"
+  if [ -f "$CHECKOUTS" ] && [ "$new" = "$(sed 's/\r$//' "$CHECKOUTS")" ]; then return; fi
+  mkdir -p "${CHECKOUTS%/*}"
+  printf '%s\n' "$new" > "$CHECKOUTS.tmp.$$" && mv -f "$CHECKOUTS.tmp.$$" "$CHECKOUTS"
 }
 
 # Lists the current project while it has a manifest, and drops it once it hasn't.
@@ -430,7 +1073,7 @@ remember_project() {
 tree_items() {
   git -C "$AGENTS_DIR" ls-tree -r --name-only "$1" -- preset 2>/dev/null \
     | sed -n 's#^preset/\(\(concepts\|references\|skills\|agents\|commands\|hooks\)/[^/]*\).*#\1#p' \
-    | grep -v '/INDEX\.md$' | LC_ALL=C sort -u
+    | grep -v -e '/INDEX\.md$' -e '^agents/recipes$' | LC_ALL=C sort -u
 }
 
 # Items committed to the preset since commit $1. Untracked files in the checkout don't count.
@@ -537,7 +1180,7 @@ is_binary() { ! tr -d '\000' < "$1" | cmp -s - "$1"; }
 #   name, description, compatibility  frontmatter values in SKILL.md
 #   key                               each frontmatter key in SKILL.md
 #   notice, router                    SKILL.md has the "Repo version first" notice / router: "true"
-#   recipe-description                frontmatter description in GENERATE.md
+#   recipe-description, recipe-output frontmatter description / output in GENERATE.md
 #   adapter-key                       "<file>:<key>" for each top-level key in agents/*.yaml
 #   user-claude, user-codex           the adapter makes the skill user-invoked
 skill_facts() {
@@ -569,6 +1212,7 @@ skill_facts() {
         seen[k] = 1
         if (file == "SKILL.md" && (k == "name" || k == "description" || k == "compatibility")) fact(k, v)
         if (file == "GENERATE.md" && k == "description") fact("recipe-description", v)
+        if (file == "GENERATE.md" && k == "output") fact("recipe-output", v)
       }
     }
     file == "SKILL.md" && index($0, ".agents/skills/" skill "/SKILL.md") && !flag["notice"]++ { fact("notice", 1) }
@@ -608,6 +1252,9 @@ cmd_check() {
     elif [ -z "${fact[$n/notice]-}" ]; then
       err "skills/$n: SKILL.md must tell agents to prefer the repo version at .agents/skills/$n/SKILL.md"
     fi
+    # A recipe without output is a full-copy recipe; the other format is "output: specifics".
+    [ -z "${fact[$n/recipe-output]-}" ] || [ "${fact[$n/recipe-output]}" = specifics ] \
+      || err "skills/$n: GENERATE.md 'output' must be 'specifics' (or left out for a full-copy recipe)"
     for key in ${fact[$n/key]-}; do
       if in_list "$key" $RUNTIME_CONTROLS; then
         err "skills/$n: '$key' is a runtime control - users opt in via .agents/overrides/<tool>/$n.yaml"
@@ -651,6 +1298,25 @@ cmd_check() {
     n="${f##*/}"; n="${n%.md}"
     in_list "agents/$n" ${listed[@]+"${listed[@]}"} || err "README.md: subagent '$n' is missing from the 'Subagents in the preset' table"
   done
+
+  # Subagent recipes (agents/recipes/<n>.md) belong to a subagent and use the specifics format.
+  local -a recipe_files=("$SRC"/agents/recipes/*.md)
+  if [ ${#recipe_files[@]} -gt 0 ]; then
+    while IFS=$'\t' read -r n desc want; do
+      [ -f "$SRC/agents/$n.md" ] || err "agents/recipes/$n.md: there is no subagent agents/$n.md for it"
+      [ "$desc" != - ] || err "agents/recipes/$n.md: needs a description in its frontmatter"
+      [ "$want" = specifics ] || err "agents/recipes/$n.md: needs 'output: specifics' in its frontmatter"
+    done < <(awk '
+      function value(v) { gsub(/^[ \t]+|[ \t]+$/, "", v); gsub(/^["\047]|["\047]$/, "", v); return v }
+      function emit() { if (file != "") print file "\t" (desc == "" ? "-" : desc) "\t" (out == "" ? "-" : out) }
+      { sub(/\r$/, "") }
+      FNR == 1 { emit(); file = FILENAME; sub(/.*\//, "", file); sub(/\.md$/, "", file); desc = ""; out = ""; infm = ($0 == "---"); next }
+      infm && $0 == "---" { infm = 0; next }
+      infm && /^description:/ && desc == "" { desc = value(substr($0, 13)) }
+      infm && /^output:/ && out == "" { out = value(substr($0, 8)) }
+      END { emit() }
+    ' "${recipe_files[@]}")
+  fi
 
   # Routers (metadata router: "true") list every other skill exactly once, each as it's invoked.
   local -a routed=()
@@ -793,6 +1459,17 @@ cmd_setup() {
   require_project
   if [ $# -gt 0 ]; then cmd_add "$@"; return; fi
   pick
+  # A new project gets a proposed name, which can be changed here.
+  if [ ! -f "$PROJECT_FILE" ] && [ -z "$PROJECT_NAME_ARG" ] && [ -z "$DRY_RUN" ]; then
+    local proposal answer
+    proposal="$(default_project_name)"
+    read -r -p "Project name [$proposal]: " answer
+    answer="${answer//$'\r'/}"
+    if [ -n "$answer" ]; then
+      valid_project_name "$answer" || die "invalid project name: $answer (letters, digits, '.', '_' and '-', not starting with a dot)"
+      PROJECT_NAME_ARG="$answer"
+    fi
+  fi
   apply ${PICKED[@]+"${PICKED[@]}"}
 }
 
@@ -861,7 +1538,7 @@ cmd_update() {
     in_list "$root" ${projects[@]+"${projects[@]}"} || projects+=("$root")
   done < <(known_projects)
   if [ ${#projects[@]} -gt 0 ]; then
-    write_projects "${projects[@]}" || echo "warning: couldn't update the project list in $PROJECTS" >&2
+    write_projects "${projects[@]}" || echo "warning: couldn't update the project list in $CHECKOUTS" >&2
   fi
   if [ -f "$MANIFEST" ] && [ "$ROOT" != "$AGENTS_DIR" ] && ! in_list "$ROOT" ${projects[@]+"${projects[@]}"}; then
     projects+=("$ROOT")
@@ -871,7 +1548,7 @@ cmd_update() {
   fi
   for p in ${projects[@]+"${projects[@]}"}; do
     if [ ! -d "$p" ]; then
-      echo "skipped $p: folder not found (delete its line from $PROJECTS if the project is gone)"
+      echo "skipped $p: folder not found (delete its line from $CHECKOUTS if the project is gone)"
       continue
     fi
     # A checkout without the manifest (another branch, a rebase) is skipped, not dropped:
@@ -897,7 +1574,23 @@ cmd="${1:-}"
 case "$cmd" in
   setup|add|remove|sync)
     args=()
-    for a in "$@"; do if [ "$a" = "--dry-run" ]; then DRY_RUN=1; else args+=("$a"); fi; done
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --dry-run) DRY_RUN=1 ;;
+        --project|--store)
+          [ $# -ge 2 ] || die "$1 needs a value"
+          if [ "$1" = --project ]; then PROJECT_NAME_ARG="$2"; else PROJECT_STORE_ARG="$2"; fi
+          shift ;;
+        --project=*) PROJECT_NAME_ARG="${1#--project=}" ;;
+        --store=*) PROJECT_STORE_ARG="${1#--store=}" ;;
+        *) args+=("$1") ;;
+      esac
+      shift
+    done
+    [ -z "$PROJECT_NAME_ARG" ] || valid_project_name "$PROJECT_NAME_ARG" \
+      || die "invalid project name: $PROJECT_NAME_ARG (letters, digits, '.', '_' and '-', not starting with a dot)"
+    [ -z "$PROJECT_STORE_ARG" ] || in_list "$PROJECT_STORE_ARG" machine agents \
+      || die "unknown store: $PROJECT_STORE_ARG (machine or agents)"
     set -- ${args[@]+"${args[@]}"} ;;
 esac
 case "$cmd" in

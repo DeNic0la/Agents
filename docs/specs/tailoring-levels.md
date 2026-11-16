@@ -2,6 +2,18 @@
 
 Implements [0005](../decisions/0005-preset-files-are-never-tracked.md), [0006](../decisions/0006-tailoring-in-levels.md) and [0007](../decisions/0007-checkout-roles-are-inferred.md). Read [model.md](../model.md) first; this spec says how to build it. Where it leaves a detail open, choose the simplest option that meets the acceptance checks and say what you chose.
 
+**Status:** implemented (2026-11-16). Deviations and settled details:
+- The tracked-file rule has one exception: `agents`' own state files (`.agents/preset.txt`, `.agents/project`, `.agents/composed.txt`, `.agents/settings.sum`, `.agents/levels`) are still updated when tracked, with a warning, because the manifest must stay true (1.3). They are never deleted: removing the last item empties a tracked manifest and leaves the others.
+- Exclude block (1.1), settled after review: `/.agents/` is replaced by exact paths when the repository tracks files in `.agents/`; the block stays (as `/.agents/`) after the last item while `.agents/` still holds the owner's files; a file with unbalanced markers is left alone with a warning; linked worktrees share one exclude file, so each checkout records its lines in `agents-exclude` in its git folder and the block is the union.
+- `.agents/project` is removed with the last item, so a chosen `--store agents` must be given again on re-add (2.1).
+- The removal gate checks mechanically: the core text occurs exactly once in the pristine core (never in text an earlier removal made), at least 3 numbered cases, and a `Review:` line with `, agreed:` (2.6). Overlapping entries: the later one is refused. `Core text:` and `Replacement:` are one line each. The review's independence isn't checkable.
+- A level with only blank lines counts as no level; a level that starts with frontmatter or holds the repo-version notice is composed but warned about (2.4).
+- When both `~/.agents/local/projects` (old list) and `checkouts` exist, they are joined and the old file removed, before the store is used (2.8).
+- The settings merge runs once per installed JSON tool (`AGENTS_JSON_TOOL=node|python3|python` picks one) and the suite fails when none is installed. Platforms run on 2026-11-16: WSL (Ubuntu), PowerShell 7 and Windows PowerShell 5.1, all passing; none of them had Node, so the Node path of the merge is untested and runs only where Node is installed (2.5). In Git Bash, `tests/smoke.sh` is not meaningful: its install steps fail because `ln -s` makes copies there.
+- The smoke tests run git without the developer's own configuration (empty global config, no system config, own `XDG_CONFIG_HOME`).
+- Not covered by a test: the interactive project-name prompt.
+- The README and REQUIREMENTS (R17–R26, K15) describe the exact flags, file names and warning texts.
+
 ## Constraints
 
 - Repo rules in [AGENTS.md](../../AGENTS.md) apply, in particular:

@@ -3,7 +3,7 @@
 My personal setup for AI coding agents (**Claude Code**, **Codex** and **GitHub Copilot**), kept in one place so it works the same in every tool, on every machine and in every project.
 
 - **Global:** clone it once per computer and run the installer. All three tools then get my instructions, skills, subagents, commands, concepts and references.
-- **Per project:** in any repository, `agents setup` copies chosen items into the folders each tool reads, where they can be committed.
+- **Per project:** in any repository, `agents setup` copies chosen items into the folders each tool reads. They are never tracked by that repository: `agents` hides them through `.git/info/exclude`.
 - **Up to date:** `agents update` pulls the latest version of this repo and refreshes your home and every project on the machine that uses it.
 
 What this project is meant to be, how tailoring to repositories works and why things are the way they are: [docs/](docs/README.md).
@@ -39,6 +39,7 @@ preset/                  tool-neutral content, written once
   skills/<name>/GENERATE.md  recipe for a repo-tailored version of the skill (none for global skills)
   skills/<name>/agents/  optional per-tool adapters (openai.yaml, claude.yaml)
   agents/<name>.md       subagents
+  agents/recipes/<name>.md  recipe for a tailored subagent (optional; not an item itself)
   commands/<name>.md     slash commands (Claude Code only - prefer skills)
   hooks/                 hook scripts
   concepts/INDEX.md      index of all concepts
@@ -68,8 +69,8 @@ AGENTS.md                instructions for working on this repo itself (CLAUDE.md
 | Concepts, references, hooks | `~/.agents/…` globally, `.agents/…` in a project (shared by all three) | | |
 
 - **Global installs** are links back to this repo, so edits show up in the repo, ready to commit.
-- **Machine-local instructions** go in `~/.agents/local/AGENTS.md`, outside the repo. Create it yourself on a machine that needs extra rules, such as a work laptop with its own safety rules or local paths; the installers never change anything in `~/.agents/local/` (only the `agents` command keeps its project list there). The global instructions point to it: Claude Code imports it with `@`, and Codex and Copilot read it because the instruction tells them to.
-- **Project setups** are copies, so they can be committed.
+- **Machine-local instructions** go in `~/.agents/local/AGENTS.md`, outside the repo. Create it yourself on a machine that needs extra rules, such as a work laptop with its own safety rules or local paths; the installers never change anything in `~/.agents/local/` (only the `agents` command keeps its list of checkouts and the project levels there, see [Set up a project](#2-set-up-a-project)). The global instructions point to it: Claude Code imports it with `@`, and Codex and Copilot read it because the instruction tells them to.
+- **Project setups** are copies in the checkout, and they stay out of the repository's history: they're listed in a managed block of `.git/info/exclude`, and a file the repository tracks is never changed. Teammates get nothing from them. Why: [decision 0005](docs/decisions/0005-preset-files-are-never-tracked.md).
 - **Codex subagents** are TOML files generated from the Markdown subagent's `name`, `description` and body. Edit the Markdown, never the TOML.
 - **Commands** are Claude Code only: Codex has deprecated custom prompts in favor of skills, and Copilot's prompt files are VS Code-specific. Write a skill when something should work in all three tools.
 
@@ -99,7 +100,7 @@ argument-hint: "What for?"           allow_implicit_invocation: false
 
 Copilot has no equivalent, so there they behave like any other skill. Start one by name: `/handoff` in Claude Code, `$handoff` in Codex.
 
-**Global skills.** Most skills are *tailored*: a project that selects one gets a version generated for that repository (see [Set up a project](#2-set-up-a-project)). A skill that has nothing to tailor is *global*: it has no `GENERATE.md` and no "Repo version first" notice, and a project that selects it gets a plain copy. To make a skill global, delete its `GENERATE.md` and the notice, and set its Kind to `global` below.
+**Global skills.** Most skills are *tailored*: a project that selects one gets a version for that repository, built from the core plus what the project and the checkout add (see [Set up a project](#2-set-up-a-project)). A skill that has nothing to tailor is *global*: it has no `GENERATE.md` and no "Repo version first" notice, and a project that selects it gets a plain copy. To make a skill global, delete its `GENERATE.md` and the notice, and set its Kind to `global` below.
 
 **Routers.** There are too many skills to remember, so each area of work has a **router**: a user-invoked global skill that names the area's skills and when to reach for each. Start the router with what you want (`/build add CSV export`). It picks one skill: it uses that skill right away if the agent may start it, or tells you its name if only you can. Routers are marked `router: "true"` in their `metadata`. `agents check` makes sure every other skill is in exactly one router, and that each router shows correctly who invokes each skill. A new skill goes into its area's router.
 
@@ -288,6 +289,7 @@ The global instructions tell every tool to read [the index](preset/concepts/INDE
 | [external-tools](preset/concepts/external-tools/CONCEPT.md) | The external programs I want agents to have, one file per tool with its use, install, check, flags and limits: [maigret](preset/concepts/external-tools/maigret.md) (username OSINT) and [Pulse Diagnostics](preset/concepts/external-tools/pulse-diagnostics.md) (Windows crashes, through its exported reports). Agents use a listed tool instead of scripting the job by hand, check it's installed, and install it in user space and isolated (`uv tool` for Python, `pnpm add -g` for Node.js, ...) only after the user's yes; admin rights need a separate yes. They watch for repeated manual work and recommend a maintained, open-source tool for it without installing it; on a yes it's added to the list. The global instructions apply it everywhere; it isn't a project default. |
 | [security-scanning](preset/concepts/security-scanning/CONCEPT.md) | When and how agents run security scans: [OSV-Scanner](preset/concepts/security-scanning/osv-scanner.md) for dependency CVEs, [Gitleaks](preset/concepts/security-scanning/gitleaks.md) for secrets, [Grype and Syft](preset/concepts/security-scanning/grype.md) for images and SBOMs, [Trivy](preset/concepts/security-scanning/trivy.md) for IaC only (pinned and signature-verified after its March 2026 compromise). Scans run on request, on a schedule, before merging dependency changes, before a release and after a new package is vetted. Agents install a scanner only after a yes, write output to the temp folder, triage by package, exploitation, severity and reachability, fix only after a yes, and never repeat a secret. The scanners stay out of the external-tools list so they load only for a scan; `security-scan` is the entry point. The global instructions point to it; it isn't a project default. |
 | [usage-budget](preset/concepts/usage-budget/CONCEPT.md) | Plan usage is a weekly budget, and some of it should be left on the last day. Agents pace against a line that keeps a 10% reserve, give every dispatched agent an explicit model tier, use scripts for deterministic work, keep one task per session and don't switch models on a large context. Before running several agents or a workflow they follow `budget-run`, and ask first when the run is large or usage is ahead of pace. [levers.md](preset/concepts/usage-budget/levers.md) maps each cost driver to the settings and hooks of Claude Code, Codex and Copilot. The global instructions apply it everywhere; it isn't a project default. |
+| [repo-checkout-roles](preset/concepts/repo-checkout-roles/CONCEPT.md) | One codebase often has several clones with different jobs (integration, read-only reference, development). The agent infers a checkout's role from what the owner does there, proposes it with the evidence and the checkout level it would add (instructions, skills, settings such as a write deny), and writes it only after a yes. Patterns seen in several projects are kept in the concept's `roles.md`. The global instructions point to it; it isn't a project default. |
 
 To add a concept, create `preset/concepts/<name>/CONCEPT.md` with `name` and `description` frontmatter, then add a row to `INDEX.md`.
 
@@ -296,6 +298,7 @@ To add a concept, create `preset/concepts/<name>/CONCEPT.md` with `name` and `de
 Run `agents check` before committing. It fails on:
 - a skill or command that breaks the [portable-skills](preset/concepts/portable-skills/CONCEPT.md) rules
 - a skill or subagent missing from the tables above, a row for one that no longer exists, an "Invoked by" cell that doesn't match the skill's adapters, or a Kind cell that doesn't match whether the skill has a `GENERATE.md`
+- a specifics recipe that isn't valid: a `GENERATE.md` whose `output` isn't `specifics`, or a recipe in `preset/agents/recipes/` without a `description`, without `output: specifics` or without its subagent
 - a symbolic link, a binary file or a file over 1 MB under `preset/` or `tools/`
 
 It also warns, without failing, when the uncommitted changes break a rule from this repo's `AGENTS.md`: `lib/common.sh` changed without `install.ps1` (or the reverse), or the installers or `bin/agents` changed without README.md and REQUIREMENTS.md. It also warns when a subagent has no `model`, and notes how many characters of names and descriptions the agent-invoked skills put into every session's skill listing, and how many remain in Claude Code once the `name-only` skills in `tools/claude/settings.json` count with their name only.
@@ -364,20 +367,72 @@ Select items (e.g. 1 3-5, all, none; Enter keeps the * ones):
 - Each selected item is copied to the project folders listed in the table above.
 - Your choice is saved in `.agents/preset.txt`.
 - Concepts and references are listed in a managed block in the project's `AGENTS.md`. `CLAUDE.md` gets a managed `@AGENTS.md` import, so Claude Code reads the same list.
+- The project gets a name and a store for its project level (see [Project name and store](#project-name-and-store)), saved in `.agents/project`.
 
-Commit these files so teammates get the same setup, whichever tool they use.
+**Nothing is tracked.** What `agents` writes in a checkout is meant for you alone, never for the repository's history. The rules, in the order `agents` follows them (the reasons are in [decision 0005](docs/decisions/0005-preset-files-are-never-tracked.md)):
+- **Exclude block.** After every `setup`, `add`, `remove`, `sync` and `update`, `agents` rewrites a block between `# agents-preset:start` and `# agents-preset:end` in `.git/info/exclude` (the file `git rev-parse --git-path info/exclude` names). It lists, each anchored with a leading `/`: `/.agents/`, every file or folder `agents` wrote outside `.agents/` (the mirrors under `.claude/`, `.github/agents/`, `.codex/agents/`, `.claude/commands/`), the instruction files it wrote (`AGENTS.md`, `CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md`) and an `agents`-written `.claude/settings.local.json`. Exact paths are used, so files you add to a shared folder such as `.claude/skills/` stay visible. The same holds for `.agents/` itself when the repository tracks files in it: then `/.agents/` is not listed, only what `agents` wrote there (the manifest and the other state files, the recipes, `.agents/levels/` and the copied items), so the files you add to that folder stay visible. Lines outside the block are never changed; a block whose start or end marker is missing (a hand edit) makes `agents` leave the file as it is and warn. The block is removed when the checkout uses no item any more, unless `.agents/` still holds files that are yours (levels, overrides, a kept generated skill): then `/.agents/` stays listed, so `git add -A` can't pick them up. Outside a git repository nothing happens. `git status` stays empty.
+  - **Worktrees** of one repository share one exclude file. Each checkout records its own lines in `agents-exclude` inside its git folder, and the block lists the union of all of them, so removing items in one worktree never un-hides what another one needs. The block goes when no worktree needs any line.
+- **A tracked instruction file is never written.**
+  - If the repository tracks `AGENTS.md`, the preset block goes into `CLAUDE.local.md`. When neither `CLAUDE.md` nor `.claude/CLAUDE.md` imports `AGENTS.md`, `CLAUDE.local.md` starts with `@AGENTS.md`, because Claude Code stops reading `AGENTS.md` on its own once a `CLAUDE.local.md` exists.
+  - If only the Claude file (`CLAUDE.md`, or `.claude/CLAUDE.md` when there's no `CLAUDE.md`) is tracked, the block stays in the untracked `AGENTS.md`, and `CLAUDE.local.md` holds `@AGENTS.md` unless the tracked file already imports it.
+  - A preset block found inside a tracked file is reported (`remove the block and commit, or keep it`) and left as it is.
+- **A tracked preset path is left alone.** If the repository already tracks a file or folder `agents` would write (say `.claude/skills/<n>` committed earlier), every `sync` warns with `git rm -r --cached <path>` and doesn't change or delete it. `agents` never runs `git rm`.
+- The one exception are `agents`' own state files (`.agents/preset.txt`, `.agents/project`, `.agents/composed.txt`, `.agents/settings.sum`, `.agents/levels`): if one is tracked, `agents` still updates it, because the manifest must stay true, and warns with the same `git rm -r --cached` hint. It never deletes one: removing the last item empties a tracked manifest and leaves the other tracked state files in place.
 
-**Skills: repo version or global.** In the picker, every tailored skill you select gets a *repo version*: a version of the skill tailored to this repository, which is always preferred over the global one. Skills you don't select stay global.
-- Every tailored skill in this repo ships as both a global `SKILL.md` and a `GENERATE.md` recipe.
-- For a repo version, `agents` copies the recipe to `.agents/recipes/skills/<name>.md`.
-- The agent generates `.agents/skills/<name>/` from it the first time the skill is needed, or when you ask ("generate the repo versions of our skills"). Codex and Copilot read that folder directly.
-- `agents sync` then mirrors it to `.claude/skills/<name>/` for Claude Code, applying your Claude overrides.
-- Until the repo version exists, the global version is used.
-- The generated skill belongs to the project. `agents remove` keeps it and tells you to delete it if you want to go back to the global version.
+**Skills: tailored or global.** In the picker, every tailored skill you select is tailored to this repository: the version in the checkout is always preferred over the global one. Skills you don't select stay global. Every tailored skill in this repo ships as both a global `SKILL.md` and a `GENERATE.md` recipe, and `agents` copies the recipe to `.agents/recipes/skills/<name>.md`. How the checkout's version comes about depends on the recipe's format:
+- **Specifics recipe** (`output: specifics` in its frontmatter): the agent writes only what is specific, the *levels*, never the core. `agents sync` composes the core and the levels into `.agents/skills/<name>/`, mirrored to `.claude/skills/<name>/`. See [Levels and composition](#levels-and-composition).
+- **Full-copy recipe** (no `output` field): the agent generates the whole `.agents/skills/<name>/` from the recipe the first time the skill is needed, or when you ask ("generate the repo versions of our skills"). `agents sync` mirrors it to `.claude/skills/<name>/`, applying your Claude overrides. The generated skill belongs to the project: `agents remove` keeps it and tells you to delete it if you want to go back to the global version.
 
-Precedence differs per tool (Claude Code prefers the global skill, Copilot the project one). So every tailored skill's global `SKILL.md` starts with a "Repo version first" notice that sends the agent to the repo version when there is one, which works the same in all three tools.
+Until the checkout's version exists, the global version is used. Precedence differs per tool (Claude Code prefers the global skill, Copilot the project one), so every tailored skill's global `SKILL.md` starts with a "Repo version first" notice that sends the agent to the checkout's version when there is one, which works the same in all three tools.
 
-A selected *global skill* (marked `(global, copied as is)` in the picker) has no recipe: `agents` copies it unchanged to `.agents/skills/<name>/` and mirrors it to `.claude/skills/<name>/`, so teammates without this preset get it too. It's managed like any other copied item: `agents update` refreshes it and `agents remove` deletes it.
+A selected *global skill* (marked `(global, copied as is)` in the picker) has no recipe: `agents` copies it unchanged to `.agents/skills/<name>/` and mirrors it to `.claude/skills/<name>/`. It's managed like any other copied item: `agents update` refreshes it and `agents remove` deletes it.
+
+### Project name and store
+
+The project is the codebase all clones of one repository share. `agents setup` gives it a name, proposed from the origin URL's last path segment (without `.git`, lowercased, odd characters turned into `-`) or, with no origin, from the folder's name. An interactive `agents setup` without items asks `Project name [<proposal>]:`; `--project <name>` skips the question. A name is plain: letters, digits, `.`, `_` and `-`, not starting with a dot. An invalid one is refused before anything changes.
+
+`--store machine|agents` picks where the project level lives (default `machine`):
+
+| Store | Path | Shared by |
+|---|---|---|
+| `machine` | `~/.agents/local/projects/<name>/` | every clone of the project on this machine |
+| `agents` | `projects/<name>/` in this repo | every machine that clones this repo; it's pushed, so choose it only for a project whose details may leave the machine |
+
+The choice is saved in `.agents/project` (two lines, `name=<name>` and `store=<machine|agents>`). A flag overrides the file and is written back. `agents` never creates the store's folders; the agent that tailors an item writes into them. The file is rewritten by every `setup`, `add`, `sync` and `update` that keeps an item, and removed with the last item, so a chosen `--store agents` has to be given again when you add items later. The checkouts of this machine are listed in `~/.agents/local/checkouts` (it was `~/.agents/local/projects` before that name went to the project store; `agents` moves the old file by itself, or joins it into `checkouts` when both exist, before it uses the store).
+
+### Levels and composition
+
+A tailored item with a specifics recipe has up to three levels (why: [decision 0006](docs/decisions/0006-tailoring-in-levels.md), the model: [docs/model.md](docs/model.md)). Each level is a plain Markdown file without frontmatter and without the "Repo version first" notice (`sync` warns when a level starts with `---` or holds that notice), with the same layout in every place:
+
+| Level | Where | Layout |
+|---|---|---|
+| Core | `preset/` in this repo | `skills/<n>/SKILL.md`, `agents/<n>.md` |
+| Project | the project store | `skills/<n>.md`, `agents/<n>.md`, `settings/claude.json` |
+| Checkout | `.agents/levels/` | the same layout |
+
+The first time a tailored item applies and a level is missing, the agent writes it from the item's recipe (`.agents/recipes/skills/<n>.md` or `.agents/recipes/agents/<n>.md`) and then runs `agents sync`. It writes only the specifics. The project level always goes into the store. The checkout level is written only when this checkout's role needs one, and only after you agree (see [repo-checkout-roles](preset/concepts/repo-checkout-roles/CONCEPT.md)). The AGENTS.md block that `agents` writes tells the agent this.
+
+On every `add`, `sync` and `update`, for each tailored item that has a specifics recipe and at least one level file, `agents` composes the file the tools read: the core without its "Repo version first" line, then `## In this project` with the project level, then `## In this checkout` with the checkout level, then one closing sentence: where the sections disagree, the more specific one wins. A missing level, or one with only blank lines, is left out; a level with no text of its own and no removal that applied composes nothing, so the item is the core. The result is regenerated each time, never edited in place, so a change to the core reaches the checkout on the next `agents update`.
+- **Skills:** `.agents/skills/<n>/` (the core's folder, `GENERATE.md` left out, with the composed `SKILL.md`), mirrored to `.claude/skills/<n>/`. The composed folders are listed in `.agents/composed.txt`; when a skill's levels are all gone, `sync` removes the folder and the core is used again.
+- **Subagents:** the whole core file (frontmatter kept) plus the sections go to `.claude/agents/<n>.md`, `.github/agents/<n>.agent.md` and the generated `.codex/agents/<n>.toml`. A subagent recipe is `preset/agents/recipes/<n>.md` with a `description` and `output: specifics` in its frontmatter; it isn't an item itself. No subagent has one yet.
+- With no level file at all, `agents sync` says `No level yet, so the core is used as it is` and the item is the core.
+
+**Settings in a level.** A level may carry `settings/claude.json`, a JSON object of Claude Code settings, typically a `permissions.deny` rule that stops writes in a read-only reference checkout. `agents` merges the project's and the checkout's file (objects key by key, arrays joined without duplicates) with `node`, or else `python3`/`python`, and writes `.claude/settings.local.json`. It does so only when that file is absent or was written by `agents` (a checksum in `.agents/settings.sum` tells). Otherwise it leaves the file, warns, and prints the JSON to add by hand. Without `node` and python it warns and skips the settings. (`AGENTS_JSON_TOOL=node|python3|python` picks the tool; the smoke tests use it to run every tool's merge.) When no level carries settings any more, a file `agents` wrote is removed; a file you edited never is. Claude Code only: Codex and Copilot levels carry instructions.
+
+**Removing core text.** A level file may hold a `## Removed from the core` section, one `### <title>` entry per removal:
+
+```
+### <short title>
+Core text: "<exact text from the core>"
+Replacement: "<new text, or empty to remove>"
+Cases:
+1. <case>
+2. <case>
+3. <case>
+Review: <agent and model or tool>, <date>, agreed: <one-line reason>
+```
+
+`agents sync` applies an entry only when its core text occurs exactly once in the core (the core as it is, not as earlier removals left it), it lists at least three numbered cases, and its `Review:` line carries `, agreed:`. Two entries whose core texts overlap can't both apply: the later one is refused. Otherwise the core text stays and `sync` warns (`removal "<title>" not applied: <reason>`). `Core text:` and `Replacement:` are each one line with both quotes on it, so a core rule that spans two lines can't be removed as a whole: quote a part of one line instead. The section is never copied into the composed file. A safety rule is narrowed, never dropped; the reasons are in [docs/model.md](docs/model.md#removing-core-text).
 
 **Defaults:** the first time a repo is set up, the items in [preset/defaults.txt](preset/defaults.txt) are added automatically. In the picker they're pre-selected. You can remove them like any other item, and existing projects aren't changed when the list changes.
 
@@ -406,11 +461,11 @@ Other project commands:
 | `agents list` | show all items (`*` = used here) |
 | `agents add <item>...` | add items |
 | `agents remove <item>...` | remove items and all their copies |
-| `agents sync` | re-apply this project's items without pulling (e.g. after a repo skill was generated) |
+| `agents sync` | re-apply this checkout's items without pulling (e.g. after a level was written or a core changed) |
 | `agents check` | validate the preset (see below) |
 | `agents audit <path>...` | list review signals in third-party skills or agents before adding them to the preset (see below) |
 
-Add `--dry-run` to `setup`, `add`, `remove` or `sync` to see which items would be copied, removed or skipped, without changing anything.
+Add `--dry-run` to `setup`, `add`, `remove` or `sync` to see which items would be copied, removed or skipped, without changing anything (the exclude block is reported, not written). `--project <name>` and `--store machine|agents` go with `setup`, `add`, `remove` and `sync` too; see [Project name and store](#project-name-and-store).
 
 Files that already exist in the project and weren't added by `agents` are never overwritten, and nothing outside the managed blocks is changed. Hooks are copied to `.agents/hooks/` but not registered: hook configuration differs per tool (`.claude/settings.json`, `.codex/hooks.json`, `.github/hooks/*.json`).
 
@@ -423,10 +478,10 @@ agents update
 Run it anywhere. It:
 1. pulls the latest version of this repo (`git pull --rebase --autostash`, so uncommitted edits survive the pull)
 2. refreshes your home for all three tools: new items get installed, and anything deleted from the repo is removed
-3. re-copies the items of every project on this machine that uses `agents`, from the latest version. Review the changes with `git diff` in each and commit them.
+3. re-copies the items of every project on this machine that uses `agents`, from the latest version, and composes the tailored items again from their core and levels. Nothing shows up in `git status`, because every file is excluded; a tracked file is left as it is, with a warning.
 4. names, per project, the items this pull added to the preset that the project doesn't use yet, with the `agents add` command for them.
 
-`agents` keeps the list of projects in `~/.agents/local/projects`, one path per line: `setup`, `add`, `remove` and `sync` add a project while it has a `.agents/preset.txt` and drop it once it hasn't. `update` skips a listed folder that's missing (delete its line if the project is gone) or a checkout without `.agents/preset.txt`, such as another branch; it doesn't drop either. It lists each project once, as its git top level, and rewrites the file in that form, so comments in it aren't kept. Windows and WSL have separate homes, so each keeps its own list. If a project can't be refreshed, `update` goes on with the others and exits with an error at the end.
+`agents` keeps the list of checkouts in `~/.agents/local/checkouts`, one path per line: `setup`, `add`, `remove` and `sync` add a checkout while it has a `.agents/preset.txt` and drop it once it hasn't. `update` skips a listed folder that's missing (delete its line if the project is gone) or a checkout without `.agents/preset.txt`, such as another branch; it doesn't drop either. It lists each project once, as its git top level, and rewrites the file in that form, so comments in it aren't kept. Windows and WSL have separate homes, so each keeps its own list. If a project can't be refreshed, `update` goes on with the others and exits with an error at the end.
 
 If the pull hits a conflict, nothing is installed. Resolve the conflict in the repo, then run `agents update` again.
 

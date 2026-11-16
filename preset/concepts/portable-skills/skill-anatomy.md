@@ -10,7 +10,7 @@ Every skill lives in its own directory under `preset/skills/`:
 skills/
   skill-name/
     SKILL.md           # Required: The skill definition (global version)
-    GENERATE.md        # Required unless the skill is global: Recipe for a repo-tailored version
+    GENERATE.md        # Required unless the skill is global: Recipe for the project and checkout levels
     scripts/           # Optional: Runnable helpers used by the skill workflow
     references/        # Optional: Skill-specific reference documentation
     supporting-file.md # Optional: Reference material loaded on demand
@@ -174,6 +174,48 @@ This is about skill *content*; the portability of `references/` *paths* is a sep
 - Shared references: stored in `preset/references/`, not inside skill directories (see [Shared References](#shared-references) for why).
 - Skill-specific references: a single supporting doc can stay as a loose file in the skill directory (the `Supporting files` entry above); when several related docs travel with the skill, the emerging convention for self-contained, distributable skills is to group them in a `references/` directory inside the skill directory, so the skill carries its own supporting docs.
 
+## Tailoring
+
+A tailored skill has a core (`SKILL.md`) and a recipe (`GENERATE.md`). A tailored subagent has its core in `preset/agents/<n>.md` and its recipe in `preset/agents/recipes/<n>.md`, which `agents check` validates the same way. A recipe names only what a repository shows; the agent never repeats the core in what it writes.
+
+### Specifics recipe
+
+Frontmatter: `description` and `output: specifics`. Without `output`, the recipe is a full-copy recipe and the agent writes a whole `SKILL.md`. The body says:
+
+1. What to inspect in the repository.
+2. What the project-level file holds: what every clone of the codebase shares. It goes to `skills/<skill>.md` (or `agents/<agent>.md`) in the project store: `~/.agents/local/projects/<name>/`, or `projects/<name>/` in the agents repo when the project chose that store.
+3. When a checkout-level file is needed and what it holds: only what the checkout's role adds (see [repo-checkout-roles](../repo-checkout-roles/CONCEPT.md)). It goes to `.agents/levels/skills/<skill>.md` (or `agents/<agent>.md`).
+4. That neither file repeats the core, and that neither carries frontmatter or the "Repo version first" notice (`agents sync` warns when a level does).
+
+A level may also carry `settings/claude.json`: Claude Code settings such as a `permissions.deny` write rule. Codex and Copilot levels carry instructions only.
+
+### Composition
+
+`agents sync` writes the instance; the agent never does. Order: the core without its notice, `## In this project`, `## In this checkout`, then one sentence saying the more specific section wins. A missing level is left out. With no level file at all, the skill behaves as before. Never edit a composed file; change the level file and sync.
+
+### Removing core text
+
+Put this at the end of a level file:
+
+```markdown
+## Removed from the core
+
+### <short title>
+Core text: "<exact text from the core>"
+Replacement: "<new text, or empty to remove>"
+Cases:
+1. <case>
+2. <case>
+3. <case>
+Review: <reviewing agent and model or tool>, <date>, agreed: <one-line reason>
+```
+
+- Cases are concrete times the core text made the agent behave wrongly or uselessly in this context. At least three.
+- The reviewer is an independent agent on another model or tool. It must agree that the change doesn't make agents misbehave. Write "agreed" in the `Review:` line only after it did.
+- `Core text:` and `Replacement:` are one line each, with both quotes on that line. A rule that spans two lines in the core can't be quoted whole: quote a part of one line, or leave the rule. An entry with an open quote is refused with a message about the line.
+- `agents sync` applies an entry only when the core text occurs exactly once in the core (as it is, not as another entry left it), there are three cases and the review agreed. Entries whose core texts overlap can't both apply: the later one is refused. Otherwise the core text stays and sync warns with the title. When the core text changes later, the entry stops applying until it is reviewed again.
+- A safety rule is narrowed, never dropped.
+
 ## Cross-Skill References
 
 Reference other skills by name:
@@ -190,7 +232,7 @@ Don't duplicate content between skills — reference and link instead.
 Required:
 
 - A `preset/skills/<skill-name>/SKILL.md` file, with the "Repo version first" notice unless the skill is global
-- A `preset/skills/<skill-name>/GENERATE.md` recipe for a repo-tailored version, unless the skill is global
+- A `preset/skills/<skill-name>/GENERATE.md` recipe, unless the skill is global; new recipes use `output: specifics`
 - Valid YAML frontmatter with `name` and `description`
 - A description that includes both what the skill does and when to use it
 

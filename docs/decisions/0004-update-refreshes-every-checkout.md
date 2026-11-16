@@ -18,4 +18,4 @@
 ## Consequences
 
 - Windows and WSL have separate homes, so each keeps its own list.
-- The list is machine-local state in `~/.agents/local/` (planned: renamed from `projects` to `checkouts`, to free `projects/` for the project-level store; see [the spec](../specs/tailoring-levels.md)).
+- The list is machine-local state in `~/.agents/local/` (renamed from `projects` to `checkouts` to free `projects/` for the project-level store; `agents` moves the old file on first use, see [the spec](../specs/tailoring-levels.md)).

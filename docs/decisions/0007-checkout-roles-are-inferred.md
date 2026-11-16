@@ -1,6 +1,6 @@
 # 0007 Checkout roles are inferred from usage
 
-- **Status:** accepted, planned (see [specs/tailoring-levels.md](../specs/tailoring-levels.md))
+- **Status:** accepted, implemented (2026-11-16) (see [specs/tailoring-levels.md](../specs/tailoring-levels.md))
 
 ## Context
 

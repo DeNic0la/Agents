@@ -1,6 +1,6 @@
 # 0006 Tailoring in levels: core, project, checkout
 
-- **Status:** accepted, planned (see [specs/tailoring-levels.md](../specs/tailoring-levels.md))
+- **Status:** accepted, implemented (2026-11-16) (see [specs/tailoring-levels.md](../specs/tailoring-levels.md))
 
 ## Context
 
@@ -13,7 +13,8 @@ A tailored skill's recipe made the agent write a complete repository version, wh
 - Subagents can have recipes and instances like skills.
 - The project level lives in a machine-local store by default, shared by the project's clones on the machine; this repo is an opt-in store per project, for sharing across machines. The checkout level lives in the checkout. Projects get a neutral name at setup; the store is chosen once per project.
 - Levels can carry tool settings (for example a write deny), not only instructions.
-- Existing full-copy recipes keep working; each moves to the specifics format when it's next edited.
+- Existing full-copy recipes keep working; each moves to the specifics format (`output: specifics` in the recipe's frontmatter) when it's next edited. No preset skill or subagent uses it yet; the tests use samples.
+- What `agents` checks of a removal is mechanical: exactly one occurrence of the core text, at least three cases, an `agreed` verdict in the review line. The independence of the review is the agent's duty.
 
 ## Rejected
 

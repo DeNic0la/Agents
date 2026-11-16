@@ -37,6 +37,10 @@ Skills may be listed by name only, without their description, to keep the contex
 
 If a repository has its own version of a skill in `.agents/skills/<name>/`, always use it instead of the global skill with the same name. It's tailored to that repository.
 
+## Checkout roles
+
+A clone of a codebase can have its own job (integration, read-only reference, development). When you see it from what I do there, follow `~/.agents/concepts/repo-checkout-roles/CONCEPT.md`: propose the role and its checkout level with evidence, and write nothing before my yes.
+
 ## References
 
 `~/.agents/references/` holds lookup material: cheat sheets, API notes, links, snippets. List the folder and open only the files relevant to the task.
