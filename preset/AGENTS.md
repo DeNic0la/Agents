@@ -2,6 +2,12 @@
 
 These instructions apply to every project on every machine this preset is installed on, for Claude Code, Codex and GitHub Copilot alike.
 
+Machine-specific instructions, if present, are in this file outside the repo; read it and follow it too: @~/.agents/local/AGENTS.md
+
+## About me
+
+I live and work in Switzerland. When you write German, whether chat replies, drafted messages, docs, comments or commit messages, always use Swiss Standard German spelling: `ss` instead of `ß` (e.g. `Grüsse`, `gross`, `Strasse`), and Swiss terms where they're usual.
+
 ## Concepts
 
 `~/.agents/concepts/INDEX.md` lists the concepts I've declared: rules for how instructions for AI agents are written and organized. Whenever you create or edit agent instructions anywhere (AGENTS.md, CLAUDE.md, copilot-instructions.md, skills, subagents, commands, hooks, prompts), read the index first and follow every concept that applies. A project may also carry its own copies under `.agents/concepts/`.

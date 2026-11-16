@@ -66,6 +66,7 @@ AGENTS.md                instructions for working on this repo itself (CLAUDE.md
 | Concepts, references, hooks | `~/.agents/…` globally, `.agents/…` in a project (shared by all three) | | |
 
 - **Global installs** are links back to this repo, so edits show up in the repo, ready to commit.
+- **Machine-local instructions** go in `~/.agents/local/AGENTS.md`, outside the repo. Create it yourself on a machine that needs extra rules, such as a work laptop with its own safety rules or local paths; the installers never touch `~/.agents/local/`. The global instructions point to it: Claude Code imports it with `@`, and Codex and Copilot read it because the instruction tells them to.
 - **Project setups** are copies, so they can be committed.
 - **Codex subagents** are TOML files generated from the Markdown subagent's `name`, `description` and body. Edit the Markdown, never the TOML.
 - **Commands** are Claude Code only: Codex has deprecated custom prompts in favor of skills, and Copilot's prompt files are VS Code-specific. Write a skill when something should work in all three tools.
