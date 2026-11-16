@@ -64,3 +64,4 @@ Outcomes by role:
 | review | `recommend` | `merge` (true or false) | `merge:human` only: posts the recommendation in the workflow document's wording (CW-65) |
 | scout | `recommendations` | `issues`: up to the configured number of `{ "title", "body" }` | files them as `origin:agent` issues (CW-71) |
 | record | `recorded` | `title`, `body` | opens a `merge:self` pull request from `cloud/out-of-scope-<N>` (CW-43) |
+| record | `skipped` | | nothing recorded; the comment says why |
