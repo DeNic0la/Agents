@@ -48,6 +48,20 @@ check "deleted subagent is removed for Copilot" gone "$HOME/.copilot/agents/$age
 check "deleted subagent is removed for Codex" gone "$HOME/.codex/agents/$agent.toml"
 check "changed file is current" cmp -s "$TMP/repo/preset/concepts/INDEX.md" "$HOME/.agents/concepts/INDEX.md"
 
+echo "== environment"
+envfile="$TMP/repo/tools/environments/smoke/claude/settings.json"
+machine_env="$HOME/.agents/local/environment"
+mkdir -p "${envfile%/*}" "${machine_env%/*}"
+echo '{"smoke": "environment"}' > "$envfile"
+printf 'smoke\r\n' > "$machine_env"
+check "install with an environment succeeds" run_install
+check "install with an environment moves nothing aside" no_line '^backup'
+check "the environment's file replaces the default" cmp -s "$envfile" "$HOME/.claude/settings.json"
+echo '../claude' > "$machine_env"
+check "install with an invalid environment name succeeds" run_install
+check "an invalid environment name keeps the default" cmp -s "$TMP/repo/tools/claude/settings.json" "$HOME/.claude/settings.json"
+rm "$machine_env"
+
 echo "== project"
 tailored="" global=""
 for d in "$TMP"/repo/preset/skills/*/; do

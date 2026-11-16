@@ -279,17 +279,42 @@ function Get-Mappings {
         }
     }
     # Tool-specific files: top-level files directly, folders one entry at a time.
+    # On a machine whose ~/.agents/local/environment names an environment, an entry at the
+    # same path under tools/environments/<env>/<tool>/ replaces the default one.
+    $machineEnv = Get-MachineEnvironment
     $homes = @{ claude = $ClaudeHome; codex = $CodexHome; copilot = $CopilotHome }
     foreach ($tool in 'claude', 'codex', 'copilot') {
+        $over = if ($machineEnv) { Join-Path $Tools "environments\$machineEnv\$tool" } else { $null }
         foreach ($e in Get-Children (Join-Path $Tools $tool)) {
             $to = Join-Path $homes[$tool] $e.Name
             if ($e.PSIsContainer) {
-                foreach ($c in Get-Children $e.FullName) { , @('link', $c.FullName, (Join-Path $to $c.Name)) }
+                foreach ($c in Get-Children $e.FullName) {
+                    , @('link', (Select-Source $c.FullName $over "$($e.Name)\$($c.Name)"), (Join-Path $to $c.Name))
+                }
             } else {
-                , @('link', $e.FullName, $to)
+                , @('link', (Select-Source $e.FullName $over $e.Name), $to)
             }
         }
     }
+}
+
+# The environment named in ~/.agents/local/environment (e.g. "work"), or $null.
+# Only a plain name counts, so the file can't point outside tools\environments\.
+function Get-MachineEnvironment {
+    $file = Join-Path $AgentsHome 'local\environment'
+    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { return $null }
+    $name = "$(Get-Content -LiteralPath $file -TotalCount 1)".Trim()
+    if ($name -match '^[A-Za-z0-9_-][A-Za-z0-9._-]*$') { return $name }
+    return $null
+}
+
+# The environment's entry at $Relative when it has one, else the default.
+function Select-Source([string]$Default, [string]$Override, [string]$Relative) {
+    if ($Override) {
+        $candidate = Join-Path $Override $Relative
+        if (Test-Path -LiteralPath $candidate) { return $candidate }
+    }
+    return $Default
 }
 
 # The `agents` command is a bash script; on Windows it runs through Git Bash,

@@ -14,7 +14,8 @@ This repository holds a personal setup for AI coding agents that can be cloned o
 | T6 | Commands are installed for Claude Code only. Codex deprecated custom prompts and Copilot prompt files are VS Code-specific, so anything that should work in all three tools is written as a skill. |
 | T7 | Concepts, references and hooks go in the shared `.agents/` folder: `~/.agents/` globally, `<project>/.agents/` in projects. |
 | T8 | Tool-specific files live in `tools/<tool>/` and are mirrored as-is into that tool's home folder. |
-| T9 | Machine-specific instructions live outside the repo in `~/.agents/local/AGENTS.md`, created by the user only where needed. The global `AGENTS.md` points to it (an `@` import for Claude Code, a plain instruction for Codex and Copilot), and the installers never touch `~/.agents/local/`. |
+| T9 | Machine-specific instructions live outside the repo in `~/.agents/local/AGENTS.md`, created by the user only where needed. The global `AGENTS.md` points to it (an `@` import for Claude Code, a plain instruction for Codex and Copilot), and the installers never change anything in `~/.agents/local/` (they only read `environment`, see T10). |
+| T10 | Tool-specific files can differ per environment. `tools/environments/<env>/<tool>/` mirrors `tools/<tool>/`, and on a machine whose `~/.agents/local/environment` holds a plain name (letters, digits, `.`, `_`, `-`, not starting with a dot), an entry there replaces the default entry at the same path. An environment can only replace entries that exist by default, so no link goes stale when a machine changes or drops its environment. Without the file, or with an invalid name, the defaults are installed. |
 
 ## 1a. Skills
 

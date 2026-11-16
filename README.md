@@ -66,7 +66,7 @@ AGENTS.md                instructions for working on this repo itself (CLAUDE.md
 | Concepts, references, hooks | `~/.agents/…` globally, `.agents/…` in a project (shared by all three) | | |
 
 - **Global installs** are links back to this repo, so edits show up in the repo, ready to commit.
-- **Machine-local instructions** go in `~/.agents/local/AGENTS.md`, outside the repo. Create it yourself on a machine that needs extra rules, such as a work laptop with its own safety rules or local paths; the installers never touch `~/.agents/local/`. The global instructions point to it: Claude Code imports it with `@`, and Codex and Copilot read it because the instruction tells them to.
+- **Machine-local instructions** go in `~/.agents/local/AGENTS.md`, outside the repo. Create it yourself on a machine that needs extra rules, such as a work laptop with its own safety rules or local paths; the installers never change anything in `~/.agents/local/`. The global instructions point to it: Claude Code imports it with `@`, and Codex and Copilot read it because the instruction tells them to.
 - **Project setups** are copies, so they can be committed.
 - **Codex subagents** are TOML files generated from the Markdown subagent's `name`, `description` and body. Edit the Markdown, never the TOML.
 - **Commands** are Claude Code only: Codex has deprecated custom prompts in favor of skills, and Copilot's prompt files are VS Code-specific. Write a skill when something should work in all three tools.
@@ -235,7 +235,9 @@ Claude Code also gets these from `tools/claude/`:
 - `claude-handoff`, which starts a background `claude` session from a handoff.
 - `usage-review`, which reports where usage went, from this machine's transcripts.
 - `upload-diagnostics`, which collects a machine's agent setup, CLI versions with pending updates, and Claude Code usage (aggregates only by default), and adds them as a dated file to an `Agents diagnostics` folder in Google Drive through the claude.ai connector. Run it on another computer (a work laptop, say) so a session anywhere can read the newest file and tune that machine.
-- `settings.json` with usage defaults: subagents without a tier run on Sonnet, and compaction starts at 200k tokens. It also registers a status line that shows weekly usage against a pace line that expects use on weekdays (weekend days count 0.2 by default; the weights are learned from how much you use on each weekday) and says whether to use more or less per workday and by how much; and a hook that asks before a workflow or a top-tier subagent while usage is ahead of pace, and before a model switch on a large context. The scripts need Node.js; [levers.md](preset/concepts/usage-budget/levers.md) has the details. The installer links this file as `~/.claude/settings.json`, so keep your own Claude Code settings in it.
+- `settings.json` with usage defaults: subagents without a tier run on Sonnet, and compaction starts at 200k tokens. It also registers a status line that shows weekly usage against a pace line that expects use on weekdays (weekend days count 0.2 by default; the weights are learned from how much you use on each weekday) and says whether to use more or less per workday and by how much; and a hook that asks before a workflow or a top-tier subagent while usage is ahead of pace, and before a model switch on a large context. The scripts need Node.js; [levers.md](preset/concepts/usage-budget/levers.md) has the details. The installer links this file as `~/.claude/settings.json`, so keep your own Claude Code settings in it. A machine with an environment (see below) gets that environment's `settings.json` instead.
+
+**Environments.** Some machines need their own version of a tool file, such as a work laptop whose Claude Code settings carry work-only permission rules. Put that version in `tools/environments/<env>/<tool>/`, at the same path it has under `tools/<tool>/`, and write the environment's name (one plain word, e.g. `work`) into `~/.agents/local/environment` on that machine. The installers then link the environment's file in place of the default; everything else stays shared. An environment can only replace files that exist by default. Edits Claude Code makes on that machine land in the environment's file, so machines no longer change each other's settings. Its content is committed like everything else: keep secrets, local folder names and absolute local paths out of it. This repo has one: `work`.
 
 ### Subagents in the preset
 
@@ -421,6 +423,13 @@ Run it anywhere. It:
 3. inside a project that uses `agents`, re-copies that project's items from the latest version. Review the changes with `git diff` and commit them.
 
 If the pull hits a conflict, nothing is installed. Resolve the conflict in the repo, then run `agents update` again.
+
+Linked files are live: `~/.claude/settings.json` is the repo's file. When you have uncommitted edits in a file that the pull also changes, bringing the autostash back can conflict and leave conflict markers in it, which breaks the tool until it's fixed. Before updating, compare `git diff --name-only` with `git fetch && git diff --name-only HEAD..@{u}`. For each file in both:
+1. Copy it somewhere outside the repo.
+2. `git checkout -- <file>`, then `agents update`.
+3. Merge your copy into the new version by hand, check it (for JSON, that it parses), and write it back in one step.
+
+With an environment of its own, a machine edits only its own settings file, so this rarely happens.
 
 Without the `agents` command, you can still update with `~/Agents/install.sh --update` (Linux/WSL) or `install.ps1 -Update` (Windows).
 

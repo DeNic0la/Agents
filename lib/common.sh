@@ -131,15 +131,38 @@ global_mappings() {
     done
   done
   # Tool-specific files: top-level files directly, folders one entry at a time.
+  # On a machine whose ~/.agents/local/environment names an environment, an entry at the
+  # same path under tools/environments/<env>/<tool>/ replaces the default one.
+  local env over src
+  env="$(machine_environment)"
   for tool in claude codex copilot; do
     case "$tool" in claude) home="$CLAUDE_HOME" ;; codex) home="$CODEX_HOME" ;; copilot) home="$COPILOT_HOME" ;; esac
+    over=""
+    if [ -n "$env" ]; then over="$tools/environments/$env/$tool"; fi
     for e in "$tools/$tool"/*; do
-      n="$(basename "$e")"
+      n="${e##*/}"
       if [ -d "$e" ]; then
-        for c in "$e"/*; do printf 'link\t%s\t%s\n' "$c" "$home/$n/$(basename "$c")"; done
+        for c in "$e"/*; do
+          src="$c"
+          if [ -n "$over" ] && [ -e "$over/$n/${c##*/}" ]; then src="$over/$n/${c##*/}"; fi
+          printf 'link\t%s\t%s\n' "$src" "$home/$n/${c##*/}"
+        done
       else
-        printf 'link\t%s\t%s\n' "$e" "$home/$n"
+        src="$e"
+        if [ -n "$over" ] && [ -e "$over/$n" ]; then src="$over/$n"; fi
+        printf 'link\t%s\t%s\n' "$src" "$home/$n"
       fi
     done
   done
+}
+
+# The environment named in ~/.agents/local/environment (e.g. "work"), or nothing.
+# Only a plain name counts, so the file can't point outside tools/environments/.
+machine_environment() {
+  local file="$AGENTS_HOME/local/environment" name=""
+  if [ -f "$file" ]; then read -r name < "$file" || true; fi
+  name="${name%$'\r'}"
+  name="${name%"${name##*[![:space:]]}"}"
+  case "$name" in ""|.*|*[!A-Za-z0-9._-]*) return 0 ;; esac
+  printf '%s' "$name"
 }

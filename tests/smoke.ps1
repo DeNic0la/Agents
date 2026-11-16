@@ -124,6 +124,21 @@ function Test-Install([string]$Mode) {
     Test-That 'deleted subagent is removed for Codex' (Test-Gone "$homeDir\.codex\agents\$agent.toml")
     Test-That 'changed file is current' ((Get-FileHash -LiteralPath $index).Hash -eq (Get-FileHash -LiteralPath "$homeDir\.agents\concepts\INDEX.md").Hash)
 
+    Write-Host "== environment with $Mode"
+    $envFile = "$repoCopy\tools\environments\smoke\claude\settings.json"
+    $machineEnv = "$homeDir\.agents\local\environment"
+    $settings = "$homeDir\.claude\settings.json"
+    New-Item -ItemType Directory -Force -Path (Split-Path $envFile), (Split-Path $machineEnv) | Out-Null
+    [System.IO.File]::WriteAllText($envFile, "{`"smoke`": `"environment`"}`n")
+    [System.IO.File]::WriteAllText($machineEnv, "smoke`r`n")
+    Test-That 'install with an environment succeeds' (Invoke-Install $repoCopy $homeDir)
+    Test-That 'install with an environment moves nothing aside' (Test-NoBackup)
+    Test-That "the environment's file replaces the default" ((Get-FileHash -LiteralPath $settings).Hash -eq (Get-FileHash -LiteralPath $envFile).Hash)
+    [System.IO.File]::WriteAllText($machineEnv, "..\claude`n")
+    Test-That 'install with an invalid environment name succeeds' (Invoke-Install $repoCopy $homeDir)
+    Test-That 'an invalid environment name keeps the default' ((Get-FileHash -LiteralPath $settings).Hash -eq (Get-FileHash -LiteralPath "$repoCopy\tools\claude\settings.json").Hash)
+    Remove-Item -LiteralPath $machineEnv
+
     if ($Mode -eq 'links') { Test-Project $repoCopy $bin }
 
     Write-Host "== uninstall with $Mode"
