@@ -23,7 +23,7 @@ If nothing here fits, name the router that does: `think`, `design`, `build`, `im
 
 - A conversation that settled what to build: `to-spec`. Work too big for one session: `wayfinder` first.
 - A spec to break down: `to-tickets` for the issue tracker, `planning-and-task-breakdown` for a task list to work through in the session.
-- Issues piling up: `triage`. One tracker issue that needs a technical spec: `analyze-issue`.
+- Issues piling up: `triage`. One tracker issue that needs a technical spec: `analyze-issue`. A Jira issue or filter handed over as an XML export: `read-jira-xml`.
 - The `.specs/` workflow: `add-task` captures a request, `plan-task` plans it, and `implement-task` (in the `build` router) builds it.
 - Knowledge someone else has: `to-questionnaire`. Stopping for now: `checkpoint` when this work continues later, `handoff` when a new agent session takes over.
 
@@ -37,6 +37,7 @@ If nothing here fits, name the router that does: `think`, `design`, `build`, `im
 | planning-and-task-breakdown | break a spec into small, verifiable, ordered tasks | agent |
 | triage | move issues and external PRs through triage states and write agent-ready briefs | user |
 | analyze-issue | write a technical spec for a tracker issue | user |
+| read-jira-xml | turn a Jira XML export (one issue or a filter) into compact Markdown | agent |
 | add-task | capture a request as a draft task in `.specs/tasks/draft/` | user |
 | plan-task | turn a draft into acceptance criteria, architecture and judged, phased sub-tasks | user |
 | to-questionnaire | write a questionnaire for someone who knows what you don't | user |

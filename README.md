@@ -139,6 +139,7 @@ Kind is `tailored` (projects generate their own version) or `global` (projects g
 | planning-and-task-breakdown | break a spec into small, verifiable, ordered tasks | agent | tailored |
 | triage | move issues and external PRs through triage states and write agent-ready briefs | user | tailored |
 | analyze-issue | write a technical spec for a tracker issue | user | tailored |
+| read-jira-xml | turn a Jira XML export (one issue or a filter) into compact Markdown | agent | global |
 | add-task | capture a request as a draft task in `.specs/tasks/draft/` | user | tailored |
 | plan-task | turn a draft into acceptance criteria, architecture and judged, phased sub-tasks | user | tailored |
 | to-questionnaire | write a questionnaire for someone who knows what you don't | user | tailored |
