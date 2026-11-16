@@ -26,6 +26,7 @@ If nothing here fits, name the router that does: `think`, `design`, `planning`, 
 - A session to learn from: `retro` improves the environment, `diagnosing-sessions` finds out with evidence why it went wrong and reports it.
 - A prompt for an AI chat: `optimize-prompt`.
 - Usage running low, or a run with many agents to size before it starts: `budget-run`.
+- Which skills fit the work now, at the start of a task or after its goal, focus or state changed: `skill-router`.
 
 ## Skills
 
@@ -41,3 +42,4 @@ If nothing here fits, name the router that does: `think`, `design`, `planning`, 
 | diagnosing-sessions | find out, with transcript evidence, why a session went wrong, and report it to whoever maintains the skill or plugin involved | user |
 | optimize-prompt | rewrite a draft prompt for an AI chat into a clearer one, without running it | agent |
 | budget-run | size a multi-agent or long run to fit the usage budget, and ask first when it's large or weekly usage is ahead of pace | agent |
+| skill-router | find and load the skills that fit the work now, at the start of a task and whenever its goal, focus or state changes | agent |

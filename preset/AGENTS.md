@@ -33,6 +33,8 @@ My plan usage is a weekly budget, and I want some of it left on the last day. Fo
 
 ## Skills
 
+Skills may be listed by name only, without their description, to keep the context small. Use the `skill-router` skill at the start of every task, and again whenever the goal, the focus or the context changes, every lifecycle state change included. It finds the skills that fit the work now and loads them.
+
 If a repository has its own version of a skill in `.agents/skills/<name>/`, always use it instead of the global skill with the same name. It's tailored to that repository.
 
 ## References

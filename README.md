@@ -4,7 +4,7 @@ My personal setup for AI coding agents (**Claude Code**, **Codex** and **GitHub 
 
 - **Global:** clone it once per computer and run the installer. All three tools then get my instructions, skills, subagents, commands, concepts and references.
 - **Per project:** in any repository, `agents setup` copies chosen items into the folders each tool reads, where they can be committed.
-- **Up to date:** `agents update` pulls the latest version of this repo and refreshes both your home and the current project.
+- **Up to date:** `agents update` pulls the latest version of this repo and refreshes your home and every project on the machine that uses it.
 
 Everything is written once in a tool-neutral form and installed where each tool expects it. Works on Linux, native Windows, and Windows with WSL. The full list of requirements is in [REQUIREMENTS.md](REQUIREMENTS.md).
 
@@ -66,7 +66,7 @@ AGENTS.md                instructions for working on this repo itself (CLAUDE.md
 | Concepts, references, hooks | `~/.agents/…` globally, `.agents/…` in a project (shared by all three) | | |
 
 - **Global installs** are links back to this repo, so edits show up in the repo, ready to commit.
-- **Machine-local instructions** go in `~/.agents/local/AGENTS.md`, outside the repo. Create it yourself on a machine that needs extra rules, such as a work laptop with its own safety rules or local paths; the installers never change anything in `~/.agents/local/`. The global instructions point to it: Claude Code imports it with `@`, and Codex and Copilot read it because the instruction tells them to.
+- **Machine-local instructions** go in `~/.agents/local/AGENTS.md`, outside the repo. Create it yourself on a machine that needs extra rules, such as a work laptop with its own safety rules or local paths; the installers never change anything in `~/.agents/local/` (only the `agents` command keeps its project list there). The global instructions point to it: Claude Code imports it with `@`, and Codex and Copilot read it because the instruction tells them to.
 - **Project setups** are copies, so they can be committed.
 - **Codex subagents** are TOML files generated from the Markdown subagent's `name`, `description` and body. Edit the Markdown, never the TOML.
 - **Commands** are Claude Code only: Codex has deprecated custom prompts in favor of skills, and Copilot's prompt files are VS Code-specific. Write a skill when something should work in all three tools.
@@ -196,6 +196,7 @@ Kind is `tailored` (projects generate their own version) or `global` (projects g
 | diagnosing-sessions | find out, with transcript evidence, why a session went wrong, and report it to whoever maintains the skill or plugin involved | user | tailored |
 | optimize-prompt | rewrite a draft prompt for an AI chat into a clearer one, without running it | agent | global |
 | budget-run | size a multi-agent or long run to fit the usage budget, and ask first when it's large or weekly usage is ahead of pace | agent | global |
+| skill-router | find and load the skills that fit the work now, at the start of a task and whenever its goal, focus or state changes | agent | global |
 | **Data** (global) | | | |
 | data | pick the skill for a data question, from one query to a shared dashboard (router) | user | global |
 | analyze | answer a business question with data, from a quick number to a formal report | agent | global |
@@ -235,7 +236,7 @@ Claude Code also gets these from `tools/claude/`:
 - `claude-handoff`, which starts a background `claude` session from a handoff.
 - `usage-review`, which reports where usage went, from this machine's transcripts.
 - `upload-diagnostics`, which collects a machine's agent setup, CLI versions with pending updates, and Claude Code usage (aggregates only by default), and adds them as a dated file to an `Agents diagnostics` folder in Google Drive through the claude.ai connector. Run it on another computer (a work laptop, say) so a session anywhere can read the newest file and tune that machine.
-- `settings.json` with usage defaults: subagents without a tier run on Sonnet, and compaction starts at 200k tokens. It also registers a status line that shows weekly usage against a pace line that expects use on weekdays (weekend days count 0.2 by default; the weights are learned from how much you use on each weekday) and says whether to use more or less per workday and by how much; and a hook that asks before a workflow or a top-tier subagent while usage is ahead of pace, and before a model switch on a large context. The scripts need Node.js; [levers.md](preset/concepts/usage-budget/levers.md) has the details. The installer links this file as `~/.claude/settings.json`, so keep your own Claude Code settings in it. A machine with an environment (see below) gets that environment's `settings.json` instead.
+- `settings.json` with usage defaults: subagents without a tier run on Sonnet, and compaction starts at 200k tokens. It also registers a status line that shows weekly usage against a pace line that expects use on weekdays (weekend days count 0.2 by default; the weights are learned from how much you use on each weekday) and says whether to use more or less per workday and by how much; and a hook that asks before a workflow or a top-tier subagent while usage is ahead of pace, and before a model switch on a large context. The scripts need Node.js; [levers.md](preset/concepts/usage-budget/levers.md) has the details. Its `skillOverrides` list every skill the agent may start on its own by name only, without its description, except `skill-router` and `dependency-vetting`; the global instructions tell agents to use `skill-router` at the start of each task and whenever its goal, focus or state changes, so they find the skills that fit. That keeps the skill listing small (Claude Code gives it 1% of the context window). Add a new agent-invoked skill there too, in every environment's settings. The installer links this file as `~/.claude/settings.json`, so keep your own Claude Code settings in it. A machine with an environment (see below) gets that environment's `settings.json` instead.
 
 **Environments.** Some machines need their own version of a tool file, such as a work laptop whose Claude Code settings carry work-only permission rules. Put that version in `tools/environments/<env>/<tool>/`, at the same path it has under `tools/<tool>/`, and write the environment's name (one plain word, e.g. `work`) into `~/.agents/local/environment` on that machine. The installers then link the environment's file in place of the default; everything else stays shared. If the name isn't a plain word, or there's no folder for it, they warn and use the defaults. An environment can only replace files that exist by default. Edits Claude Code makes on that machine land in the environment's file, so machines no longer change each other's settings. Its content is committed like everything else: keep secrets, local folder names and absolute local paths out of it. This repo has one: `work`.
 
@@ -295,7 +296,7 @@ Run `agents check` before committing. It fails on:
 - a skill or subagent missing from the tables above, a row for one that no longer exists, an "Invoked by" cell that doesn't match the skill's adapters, or a Kind cell that doesn't match whether the skill has a `GENERATE.md`
 - a symbolic link, a binary file or a file over 1 MB under `preset/` or `tools/`
 
-It also warns, without failing, when the uncommitted changes break a rule from this repo's `AGENTS.md`: `lib/common.sh` changed without `install.ps1` (or the reverse), or the installers or `bin/agents` changed without README.md and REQUIREMENTS.md. It also warns when a subagent has no `model`, and notes how many characters of names and descriptions the agent-invoked skills put into every session's skill listing.
+It also warns, without failing, when the uncommitted changes break a rule from this repo's `AGENTS.md`: `lib/common.sh` changed without `install.ps1` (or the reverse), or the installers or `bin/agents` changed without README.md and REQUIREMENTS.md. It also warns when a subagent has no `model`, and notes how many characters of names and descriptions the agent-invoked skills put into every session's skill listing, and how many remain in Claude Code once the `name-only` skills in `tools/claude/settings.json` count with their name only.
 
 After changing the installers, `lib/common.sh` or `bin/agents`, run the smoke tests on every platform you can reach. They work on a copy of the repo with temporary home folders, so your own setup isn't touched:
 
@@ -420,7 +421,10 @@ agents update
 Run it anywhere. It:
 1. pulls the latest version of this repo (`git pull --rebase --autostash`, so uncommitted edits survive the pull)
 2. refreshes your home for all three tools: new items get installed, and anything deleted from the repo is removed
-3. inside a project that uses `agents`, re-copies that project's items from the latest version. Review the changes with `git diff` and commit them.
+3. re-copies the items of every project on this machine that uses `agents`, from the latest version. Review the changes with `git diff` in each and commit them.
+4. names, per project, the items this pull added to the preset that the project doesn't use yet, with the `agents add` command for them.
+
+`agents` keeps the list of projects in `~/.agents/local/projects`, one path per line: `setup`, `add`, `remove` and `sync` add a project while it has a `.agents/preset.txt` and drop it once it hasn't. `update` skips a listed folder that's missing (delete its line if the project is gone) or a checkout without `.agents/preset.txt`, such as another branch; it doesn't drop either. It lists each project once, as its git top level, and rewrites the file in that form, so comments in it aren't kept. Windows and WSL have separate homes, so each keeps its own list. If a project can't be refreshed, `update` goes on with the others and exits with an error at the end.
 
 If the pull hits a conflict, nothing is installed. Resolve the conflict in the repo, then run `agents update` again.
 

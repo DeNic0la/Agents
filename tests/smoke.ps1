@@ -52,8 +52,12 @@ function Get-Snapshot([string]$Dir) {
         Sort-Object FullName | ForEach-Object { $_.FullName + ':' + (Get-FileHash -LiteralPath $_.FullName).Hash }) -join '|'
 }
 
-function Test-Project([string]$RepoCopy, [string]$Bin) {
+function Test-Project([string]$RepoCopy, [string]$Bin, [string]$HomeDir) {
     Write-Host '== project (agents through the Git Bash shim)'
+    # agents keeps its project list in ~/.agents/local; keep it in the temporary home.
+    $savedHome = $env:HOME
+    $env:HOME = $HomeDir
+    $projects = "$HomeDir\.agents\local\projects"
     $agentsCmd = Join-Path $Bin 'agents.cmd'
     $skills = Get-ChildItem -LiteralPath "$RepoCopy\preset\skills" -Directory
     $tailored = $skills | Where-Object { Test-Path -LiteralPath "$($_.FullName)\GENERATE.md" } | Select-Object -First 1 -ExpandProperty Name
@@ -76,6 +80,7 @@ function Test-Project([string]$RepoCopy, [string]$Bin) {
         }
         Test-That 'add succeeds' (Invoke-Native $agentsCmd (@('add') + $items))
         foreach ($f in $files) { Test-That "add creates $f" (Test-Path -LiteralPath "$proj\$f") }
+        Test-That 'add lists the project for update' ((Test-Path -LiteralPath $projects) -and [bool](@(Get-Content -LiteralPath $projects) -match '/project$'))
         $agentsMd = [System.IO.File]::ReadAllText("$proj\AGENTS.md")
         Test-That 'AGENTS.md has the managed block' ($agentsMd.Contains('<!-- agents-preset:start -->'))
         Test-That 'AGENTS.md has LF line endings' (-not $agentsMd.Contains("`r`n"))
@@ -92,8 +97,10 @@ function Test-Project([string]$RepoCopy, [string]$Bin) {
         Test-That 'removing every item succeeds' (Invoke-Native $agentsCmd (@('remove') + $selected))
         $left = @(Get-ChildItem -LiteralPath $proj -Force | Select-Object -ExpandProperty Name)
         Test-That 'removing every item leaves the project as it was' ($left.Count -eq 1 -and $left[0] -eq '.git')
+        Test-That 'removing every item drops the project from the update list' (Test-Gone $projects)
     } finally {
         Pop-Location
+        $env:HOME = $savedHome
     }
 }
 
@@ -146,7 +153,7 @@ function Test-Install([string]$Mode) {
     Test-That 'an unknown environment prints a warning' ([bool]($Out -match "^warning: there's no tools/environments/nosuch"))
     Remove-Item -LiteralPath $machineEnv
 
-    if ($Mode -eq 'links') { Test-Project $repoCopy $bin }
+    if ($Mode -eq 'links') { Test-Project $repoCopy $bin $homeDir }
 
     Write-Host "== uninstall with $Mode"
     $edited = "$homeDir\.agents\concepts\INDEX.md"

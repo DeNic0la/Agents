@@ -84,6 +84,9 @@ for f in .agents/preset.txt ".agents/recipes/skills/$tailored.md" ".claude/agent
          ".github/agents/$agent.agent.md" ".codex/agents/$agent.toml" ${global:+".agents/skills/$global/SKILL.md" ".claude/skills/$global/SKILL.md"}; do
   check "add creates $f" test -f "$proj/$f"
 done
+proj_root="$(cd "$(git -C "$proj" rev-parse --show-toplevel)" && pwd)"
+projects="$HOME/.agents/local/projects"
+check "add lists the project for update" grep -qxF "$proj_root" "$projects"
 check "AGENTS.md has the managed block" grep -q '^<!-- agents-preset:start -->' "$proj/AGENTS.md"
 check "CLAUDE.md imports AGENTS.md" grep -q '^@AGENTS.md' "$proj/CLAUDE.md"
 before="$(snapshot "$proj")"
@@ -92,9 +95,39 @@ check "remove --dry-run changes nothing" test "$before" = "$(snapshot "$proj")"
 git -C "$proj" add -A && git -C "$proj" -c user.name=smoke -c user.email=smoke@example.invalid commit -qm setup
 check "sync succeeds" agents_in "$proj" sync
 check "sync changes nothing" test -z "$(git -C "$proj" status --porcelain)"
+
+echo "== update"
+# Simulates a pull: the copy becomes a git repo as it is now, then gains a new skill and a
+# change to the global skill the project uses.
+git -C "$TMP/repo" init -q && git -C "$TMP/repo" add -A
+git -C "$TMP/repo" -c user.name=smoke -c user.email=smoke@example.invalid commit -qm base
+base="$(git -C "$TMP/repo" rev-parse HEAD)"
+mkdir "$TMP/repo/preset/skills/smoke-new"
+printf -- '---\nname: smoke-new\ndescription: Use in the smoke test.\n---\n' > "$TMP/repo/preset/skills/smoke-new/SKILL.md"
+if [ -n "$global" ]; then echo "changed" >> "$TMP/repo/preset/skills/$global/SKILL.md"; fi
+git -C "$TMP/repo" add -A
+git -C "$TMP/repo" -c user.name=smoke -c user.email=smoke@example.invalid commit -qm pulled
+# A hand-edited list: CRLF, a trailing slash, a folder that's gone, a checkout without a manifest.
+other="$TMP/no-manifest"
+mkdir "$other" && git -C "$other" init -q
+other_root="$(cd "$(git -C "$other" rev-parse --show-toplevel)" && pwd)"
+printf '%s/\r\n%s\r\n%s\r\n' "$proj_root" "$TMP/gone" "$other" >> "$projects"
+check "update outside the project succeeds" agents_in "$TMP" update --no-pull "$base"
+if [ -n "$global" ]; then
+  check "update refreshes a listed project" cmp -s "$TMP/repo/preset/skills/$global/SKILL.md" "$proj/.agents/skills/$global/SKILL.md"
+fi
+check "update names a new item the project doesn't use" grep -qF "not used in $proj_root: skills/smoke-new" "$TMP/out"
+check "update refreshes a project listed twice only once" test "$(grep -c "^Refreshing " "$TMP/out")" = 1
+check "update lists a project once, as its top level" test "$(grep -cF "$proj_root" "$projects")" = 1
+check "update skips a missing folder" grep -qF "skipped $TMP/gone: folder not found" "$TMP/out"
+check "update skips a checkout without a manifest" grep -qF "skipped $other_root: no .agents/preset.txt" "$TMP/out"
+check "update keeps skipped projects listed" eval 'grep -qxF "$TMP/gone" "$projects" && grep -qxF "$other_root" "$projects"'
+printf '%s\n' "$proj_root" > "$projects"
+
 # shellcheck disable=SC2046
 check "removing every item succeeds" agents_in "$proj" remove $(grep -v '^#' "$proj/.agents/preset.txt")
 check "removing every item leaves the project as it was" test "$(ls -A "$proj")" = ".git"
+check "removing every item drops the project from the update list" gone "$projects"
 
 echo "== uninstall"
 check "uninstall succeeds" run_install --uninstall

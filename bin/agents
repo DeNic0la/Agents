@@ -31,7 +31,8 @@ and preferred over the global version. Global skills (no recipe) are copied as t
 Skills you don't add stay global.
 
 Anywhere:
-  update             pull the preset repo, refresh your home and the current project
+  update             pull the preset repo, refresh your home and every project on this machine
+                     that uses the preset, and name new preset items a project doesn't use
   install            re-install the preset into your home
   check              validate the preset: skill rules, README catalog, routers, file hygiene
   audit <path>...    list review signals in third-party skills or agents before adding them
@@ -63,6 +64,9 @@ PROJECT_OVERRIDES="$ROOT/.agents/overrides"   # user-owned runtime controls, nev
 SKILL_FIELDS="name description license compatibility metadata"
 RUNTIME_CONTROLS="allowed-tools disallowed-tools context agent model effort"
 DRY_RUN=""   # set by --dry-run: apply() reports instead of writing
+# This machine's projects that use the preset, one path per line, for `agents update`.
+# Machine-local, so it lives outside the repo next to the user's own local files.
+PROJECTS="$HOME/.agents/local/projects"
 
 require_project() {
   [ "$ROOT" != "$AGENTS_DIR" ] || die "run this inside a project, not the preset repo"
@@ -387,6 +391,68 @@ apply() {
     echo "Hooks are copied to .agents/hooks but not registered. Register them per tool:"
     echo "  Claude Code: .claude/settings.json   Codex: .codex/hooks.json   Copilot: .github/hooks/*.json"
   fi
+  # The project is set up either way; a list that can't be written only costs the next update.
+  remember_project || echo "warning: couldn't update the project list in $PROJECTS" >&2
+}
+
+# The listed projects, without comments, blank lines, CRs, trailing spaces or trailing slashes.
+known_projects() {
+  [ -f "$PROJECTS" ] || return 0
+  sed -e 's/\r$//' -e 's/[[:space:]]*$//' -e 's#\(.\)/*$#\1#' -e '/^[[:space:]]*#/d' -e '/^$/d' "$PROJECTS"
+}
+
+# A project folder as ROOT names it: the git top level (or the folder), without symlinks or /tmp aliases.
+project_root() {
+  (cd "$1" && cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" && pwd)
+}
+
+# Writes the project list, only when it changed, through a temporary file so a reader
+# never sees it half written. An empty list removes the file.
+write_projects() {
+  if [ $# -eq 0 ]; then rm -f "$PROJECTS"; return; fi
+  local new
+  new="$(printf '%s\n' "$@" | LC_ALL=C sort -u)"
+  if [ -f "$PROJECTS" ] && [ "$new" = "$(sed 's/\r$//' "$PROJECTS")" ]; then return; fi
+  mkdir -p "${PROJECTS%/*}"
+  printf '%s\n' "$new" > "$PROJECTS.tmp.$$" && mv -f "$PROJECTS.tmp.$$" "$PROJECTS"
+}
+
+# Lists the current project while it has a manifest, and drops it once it hasn't.
+remember_project() {
+  local -a keep=()
+  local p
+  while IFS= read -r p; do [ "$p" = "$ROOT" ] || keep+=("$p"); done < <(known_projects)
+  [ ! -f "$MANIFEST" ] || keep+=("$ROOT")
+  write_projects ${keep[@]+"${keep[@]}"}
+}
+
+# The preset's items at a commit, as kind/name (one git call, not one per item).
+tree_items() {
+  git -C "$AGENTS_DIR" ls-tree -r --name-only "$1" -- preset 2>/dev/null \
+    | sed -n 's#^preset/\(\(concepts\|references\|skills\|agents\|commands\|hooks\)/[^/]*\).*#\1#p' \
+    | grep -v '/INDEX\.md$' | LC_ALL=C sort -u
+}
+
+# Items committed to the preset since commit $1. Untracked files in the checkout don't count.
+added_items() {
+  local old new
+  old="$(tree_items "$1")" || return 0
+  new="$(tree_items HEAD)" || return 0
+  [ -n "$old" ] || return 0
+  LC_ALL=C comm -13 <(printf '%s\n' "$old") <(printf '%s\n' "$new")
+}
+
+# Names the items among $2... that project $1 doesn't use.
+report_new() {
+  local p="$1" item; shift
+  [ $# -gt 0 ] || return 0
+  local -a used=() missing=()
+  while IFS= read -r item; do used+=("$item"); done \
+    < <(sed -e 's/\r$//' -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' "$p/.agents/preset.txt")
+  for item in "$@"; do in_list "$item" ${used[@]+"${used[@]}"} || missing+=("$item"); done
+  [ ${#missing[@]} -gt 0 ] || return 0
+  echo "New in the preset, not used in $p: ${missing[*]}"
+  echo "  To add them: cd \"$p\" && agents add ${missing[*]}"
 }
 
 # Interactive picker; leaves the result in PICKED.
@@ -622,14 +688,23 @@ cmd_check() {
       END { if (file != "" && !model) print file }
     ' "${agent_files[@]}")
   fi
-  local listing=0 listing_count=0
+  # Claude Code lists a skill set to "name-only" in the default settings' skillOverrides without its description.
+  local -a name_only=()
+  local listing=0 listing_count=0 claude_listing=0 name_only_count=0
+  while IFS= read -r n; do name_only+=("$n"); done < <(sed -n 's/^[[:space:]]*"\([a-z0-9-]*\)":[[:space:]]*"name-only".*/\1/p' "$AGENTS_DIR/tools/claude/settings.json" 2>/dev/null)
   for dir in "$SRC"/skills/*/; do
     n="${dir%/}"; n="${n##*/}"
     [ -z "${fact[$n/user-claude]-}" ] || continue
     desc="${fact[$n/description]-}"
     listing=$((listing + ${#n} + ${#desc})); listing_count=$((listing_count + 1))
+    if in_list "$n" ${name_only[@]+"${name_only[@]}"}; then
+      claude_listing=$((claude_listing + ${#n})); name_only_count=$((name_only_count + 1))
+    else
+      claude_listing=$((claude_listing + ${#n} + ${#desc}))
+    fi
   done
-  echo "note: $listing_count agent-invoked skills put $listing characters of names and descriptions into every session (Claude Code's listing budget is 1% of the context window, Codex's 2%)"
+  echo "note: $listing_count agent-invoked skills put $listing characters of names and descriptions into every Codex and Copilot session (Codex's listing budget is 2% of the context window)"
+  echo "note: in Claude Code, $name_only_count of them are listed by name only (skillOverrides), so they take $claude_listing characters (its budget is 1% of the context window)"
 
   # Plain text files only: links don't survive a Windows checkout, and agents can't read binaries.
   # One search per rule, not per file, so it stays fast in Git Bash.
@@ -768,19 +843,53 @@ cmd_list() {
 cmd_update() {
   if [ "${1:-}" != "--no-pull" ]; then
     echo "Updating $AGENTS_DIR"
+    local before
+    before="$(git -C "$AGENTS_DIR" rev-parse HEAD 2>/dev/null)" || before=""
     # --autostash keeps local edits (e.g. made through ~/.claude) across the pull.
     git -C "$AGENTS_DIR" pull --rebase --autostash || die "git pull failed - resolve it in $AGENTS_DIR"
     # Re-run from disk so a changed script takes effect.
-    exec bash "$AGENTS_DIR/bin/agents" update --no-pull
+    exec bash "$AGENTS_DIR/bin/agents" update --no-pull ${before:+"$before"}
   fi
+  # update --no-pull [commit]: items added to the preset since that commit are reported.
+  local since="${2:-}" p root item failed=0
+  local -a projects=() added=()
   global_install
-  if [ -f "$MANIFEST" ] && [ "$ROOT" != "$AGENTS_DIR" ]; then
-    echo "Refreshing $ROOT"
-    local -a items=()
-    local item
-    while IFS= read -r item; do items+=("$item"); done < <(selected)
-    apply ${items[@]+"${items[@]}"}
+  # Each listed folder in the form ROOT gives it, once; the list is rewritten in that form.
+  while IFS= read -r p; do
+    root="$p"
+    if [ -d "$p" ]; then root="$(project_root "$p")" || root="$p"; fi
+    in_list "$root" ${projects[@]+"${projects[@]}"} || projects+=("$root")
+  done < <(known_projects)
+  if [ ${#projects[@]} -gt 0 ]; then
+    write_projects "${projects[@]}" || echo "warning: couldn't update the project list in $PROJECTS" >&2
   fi
+  if [ -f "$MANIFEST" ] && [ "$ROOT" != "$AGENTS_DIR" ] && ! in_list "$ROOT" ${projects[@]+"${projects[@]}"}; then
+    projects+=("$ROOT")
+  fi
+  if [ -n "$since" ]; then
+    while IFS= read -r item; do added+=("$item"); done < <(added_items "$since")
+  fi
+  for p in ${projects[@]+"${projects[@]}"}; do
+    if [ ! -d "$p" ]; then
+      echo "skipped $p: folder not found (delete its line from $PROJECTS if the project is gone)"
+      continue
+    fi
+    # A checkout without the manifest (another branch, a rebase) is skipped, not dropped:
+    # only setup, add, remove and sync in the project change whether it's listed.
+    if [ ! -f "$p/.agents/preset.txt" ]; then
+      echo "skipped $p: no .agents/preset.txt in this checkout"
+      continue
+    fi
+    echo "Refreshing $p"
+    # A child process per project, so ROOT and MANIFEST are that project's.
+    if ! (cd "$p" && bash "$AGENTS_DIR/bin/agents" sync); then
+      echo "warning: refreshing $p failed - run 'agents sync' there" >&2
+      failed=$((failed + 1))
+      continue
+    fi
+    report_new "$p" ${added[@]+"${added[@]}"}
+  done
+  [ "$failed" -eq 0 ] || die "$failed project(s) couldn't be refreshed"
 }
 
 cmd="${1:-}"
