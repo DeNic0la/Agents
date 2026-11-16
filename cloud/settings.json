@@ -5,10 +5,30 @@
   "agentLogin": "denic0la-agents[bot]",
   "dispatcherLogin": "github-actions[bot]",
   "mode": "dry-run",
+  "models": {
+    "fast": "claude-haiku-5-5",
+    "standard": "claude-sonnet-5-5",
+    "deep": "claude-opus-5-5"
+  },
+  "platform": {
+    "apiUrl": "https://api.anthropic.com",
+    "repoEnvironment": "agents-repo",
+    "webEnvironment": "agents-web",
+    "sessionLink": "https://platform.claude.com/sessions/{id}",
+    "tokenRotationMinutes": 50,
+    "sessionTimeoutMinutes": 330
+  },
   "caps": {
     "monthlyUsd": 100,
-    "perIssueUsd": { "direct": 2, "lean": 8, "full": 25 },
-    "perRunUsd": { "triage": 1, "scout": 5 }
+    "perIssueUsd": {
+      "direct": 2,
+      "lean": 8,
+      "full": 25
+    },
+    "perRunUsd": {
+      "triage": 1,
+      "scout": 5
+    }
   },
   "agentPermissions": {
     "metadata": "read",
@@ -19,11 +39,23 @@
     "statuses": "read",
     "actions": "read"
   },
-  "allowedHosts": ["github.com", "api.github.com", "codeload.github.com", "objects.githubusercontent.com", "api.anthropic.com"],
+  "allowedHosts": [
+    "github.com",
+    "api.github.com",
+    "codeload.github.com",
+    "objects.githubusercontent.com",
+    "api.anthropic.com"
+  ],
   "parallelImplementations": 2,
   "reviewRounds": 3,
-  "scout": { "schedule": "weekly", "issuesPerRun": 3 },
+  "scout": {
+    "schedule": "weekly",
+    "issuesPerRun": 3
+  },
   "typoSizeLines": 10,
-  "bigChange": { "lines": 400, "files": 15 },
+  "bigChange": {
+    "lines": 400,
+    "files": 15
+  },
   "warningLevel": 0.8
 }
