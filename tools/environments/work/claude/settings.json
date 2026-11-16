@@ -61,7 +61,26 @@
     "padding": 0
   },
   "enabledPlugins": {
-    "frontend-design@anthropic-plugin-directory": true
+    "frontend-design@anthropic-plugin-directory": true,
+    "10x-Team@synced": false,
+    "chrome-extension-builder@synced": false,
+    "claude-bridge@synced": false,
+    "code-modernization@synced": false,
+    "code-simplifier@synced": false,
+    "context7@synced": false,
+    "cowork-plugin-management@synced": false,
+    "data@synced": false,
+    "design@synced": false,
+    "desktop-commander@synced": false,
+    "engineering@synced": false,
+    "java-backend-skills@synced": false,
+    "mattpocock-skills@synced": false,
+    "modern-web-guidance@synced": false,
+    "productivity@synced": false,
+    "streaming-skills-plugin@synced": false,
+    "supermatt@synced": false,
+    "task-observer@synced": false,
+    "context7@claude-plugins-official": true
   },
   "modelSettings": {
     "claude-opus-5-5": {
