@@ -30,22 +30,19 @@ function checkReady(issue, settings) {
   return { ok: failing.length === 0, failing };
 }
 
-// Issues in `in-progress` or `in-review` hold a slot; an issue returning to
-// `in-progress` never waits. `ready` issues that pass the check start lowest number
-// first while slots are free.
+// Issues in `in-progress` or `in-review` hold a slot. An issue that is `ready`, or
+// resumes into `in-progress`, starts only when a slot is free (D47).
+const hasLabel = (issue, label) => (issue.labels instanceof Set ? issue.labels.has(label) : (issue.labels || []).includes(label));
+
+// CW-12: the issues that start now, lowest number first, as many as slots are free.
+// A paused issue takes no slot.
 function startableQueue(readyIssues, activeCount, settings) {
   const free = Math.max(0, Number(settings.parallelImplementations || 0) - activeCount);
   return readyIssues
-    .filter((i) => checkReady(i, settings).ok)
+    .filter((i) => checkReady(i, settings).ok && !hasLabel(i, L.PAUSED))
     .map((i) => i.number)
     .sort((a, b) => a - b)
     .slice(0, free);
 }
 
-const activeCount = (openIssues) =>
-  openIssues.filter((i) => {
-    const labels = new Set(i.labels);
-    return labels.has('in-progress') || labels.has('in-review');
-  }).length;
-
-module.exports = { checkReady, startableQueue, activeCount, routeLabel };
+module.exports = { checkReady, startableQueue, routeLabel };

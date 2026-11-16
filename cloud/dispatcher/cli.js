@@ -6,15 +6,21 @@
 const fs = require('fs');
 const path = require('path');
 const { createClient } = require('./github/client');
-const { loadIssueView, listOpenIssues } = require('./github/snapshot');
+const { loadIssueView, listOpenIssues, listClosedSince } = require('./github/snapshot');
 const { applyPlan, dryRunComment } = require('./github/apply');
 const { decideAll } = require('./decide');
-const { readRecord } = require('./decide/markers');
 const { closingIssues } = require('./decide/spec');
-const { startableQueue, activeCount } = require('./decide/ready');
+const L = require('./decide/labels');
 const { settingsProblems } = require('./decide/settings');
 
 const SETTINGS = path.join(__dirname, '..', 'settings.json');
+
+// D49: all dispatch runs share one concurrency group, and a newer pending run replaces
+// an older one. So each run also reconciles every issue that changed recently: what a
+// replaced run would have looked at is never lost.
+const RECENT_MINUTES = 30;
+const ACTIVE = ['in-progress', 'in-review'];
+const CLEANUP = [...L.STATES, L.APPROVED, L.PAUSED, L.BUDGET_EXTEND];
 
 // Which issues an event concerns: a list of numbers, or 'all' for a full reconcile.
 function focusIssues(name, event) {
@@ -35,6 +41,20 @@ function focusIssues(name, event) {
     default:
       return [];
   }
+}
+
+// Which issues one run decides: the ones the event concerns, every open issue changed
+// recently, every recently closed issue that still carries labels to clean, and every
+// `ready` issue, which competes for the free slots (D47). `activeElsewhere` counts the
+// active issues outside that set.
+function reconcileTargets({ focus, open, closed = [], now = Date.now(), recentMinutes = RECENT_MINUTES }) {
+  const since = now - recentMinutes * 60 * 1000;
+  const recent = (i) => i.updatedAt && Date.parse(i.updatedAt) >= since;
+  const numbers = new Set(focus === 'all' ? open.map((i) => i.number) : focus);
+  for (const i of open) if (recent(i) || i.labels.includes('ready')) numbers.add(i.number);
+  for (const i of closed) if (recent(i) && i.labels.some((l) => CLEANUP.includes(l))) numbers.add(i.number);
+  const activeElsewhere = open.filter((i) => !numbers.has(i.number) && i.labels.some((l) => ACTIVE.includes(l))).length;
+  return { numbers: [...numbers].sort((a, b) => a - b), activeElsewhere };
 }
 
 function loadSettings(file = SETTINGS) {
@@ -58,24 +78,15 @@ async function main() {
   const client = createClient({ token: env.GITHUB_TOKEN, repository: env.GITHUB_REPOSITORY, ...(env.GITHUB_API_URL ? { apiUrl: env.GITHUB_API_URL } : {}) });
 
   const open = await listOpenIssues(client);
-  const numbers = focus === 'all' ? open.map((i) => i.number) : focus;
+  const closed = await listClosedSince(client, new Date(Date.now() - RECENT_MINUTES * 60 * 1000).toISOString());
+  const { numbers, activeElsewhere } = reconcileTargets({ focus, open, closed });
   if (!numbers.length) return console.log('No issue to reconcile.');
-  const readyNumbers = open.filter((i) => i.labels.includes('ready')).map((i) => i.number);
 
-  const views = new Map();
-  for (const n of new Set([...numbers, ...readyNumbers])) views.set(n, await loadIssueView(client, n));
+  const views = [];
+  for (const n of numbers) views.push(await loadIssueView(client, n));
+  const ctx = { settings, control: { stopped: env.CLOUD_STOPPED === 'true' }, running: new Set(), activeElsewhere };
 
-  const queue = startableQueue(
-    readyNumbers.map((n) => {
-      const v = views.get(n);
-      return { number: n, labels: v.labels, record: readRecord(v.timeline, settings).record, dependencies: v.dependencies };
-    }),
-    activeCount(open),
-    settings,
-  );
-  const ctx = { settings, control: { stopped: env.CLOUD_STOPPED === 'true' }, running: new Set(), queue };
-
-  for (const plan of decideAll(numbers.map((n) => views.get(n)), ctx)) {
+  for (const plan of decideAll(views, ctx)) {
     await applyPlan(client, plan, settings.mode);
     const summary = dryRunComment(plan);
     console.log(`#${plan.number}: ${summary ? summary.split('\n').filter((l) => l.startsWith('- ')).join(' ') : 'nothing to do'}`);
@@ -90,4 +101,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { focusIssues, loadSettings };
+module.exports = { focusIssues, reconcileTargets, loadSettings };

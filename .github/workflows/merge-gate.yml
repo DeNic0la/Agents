@@ -1,13 +1,15 @@
-# The checkout pins the default branch on purpose. `pull_request_review` runs the PR's own copy of
-# the workflow, and `pull_request_target` must never run PR code with a write token: the gate
-# code always comes from the default branch, never from the pull request.
+# The merge gate (docs/specs/cloud-development-workflow-build.md, D50). Every trigger runs this
+# file from the default branch, so the gate code and its write token never come from a pull
+# request: `pull_request_target` and `workflow_run` both use the default branch's workflow.
+# Reviews arrive through review-relay, whose `pull_request_review` run has no permissions.
 name: merge-gate
 
 on:
   pull_request_target:
     types: [opened, reopened, synchronize, edited, ready_for_review, labeled, unlabeled]
-  pull_request_review:
-    types: [submitted, edited, dismissed]
+  workflow_run:
+    workflows: [review-relay]
+    types: [completed]
   workflow_dispatch:
     inputs:
       pr:
@@ -21,7 +23,7 @@ permissions:
   statuses: write
 
 concurrency:
-  group: merge-gate-${{ github.event.pull_request.number || inputs.pr }}
+  group: merge-gate-${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha || inputs.pr }}
   cancel-in-progress: true
 
 jobs:

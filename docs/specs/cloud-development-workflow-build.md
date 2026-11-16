@@ -83,19 +83,19 @@ A review of the workflow document and the spec before phase 0 found contradictio
 | D14 | C4: may the owner change the origin in any direction? | Yes, any change by the owner counts (CW-4). | yes |
 | D15 | C5: the stop switch "at once" or "at the next step" | The stop switch interrupts running sessions at once. The monthly cap is enforced through each session's hard limit (D25). | yes |
 | D16 | C6: who records "approved over objection" | The dispatcher comments it and removes `objection` when the owner's `approved` overrides it. | yes |
-| D17 | C7: the owner can't approve their own pull request, so `merge:human` could never pass for this build | `merge-gate` is also green when the owner opened the pull request. | yes |
+| D17 | C7: the owner can't approve their own pull request, so `merge:human` could never pass for this build | `merge-gate` is also green when the owner opened the pull request. The dispatcher never merges a pull request the owner opened; the owner merges it. | yes |
 | D18 | C8: the review agent can't approve a pull request the same App opened | The review agent's verdict is the review session's structured result, recorded by the dispatcher in a marker; `merge-gate` reads the marker. | yes |
 | D19 | C9: scenario 13 and CW-19 were in no phase | Both are in phase 2; phase 10 runs all 13 scenarios. | yes |
 | D20 | C10: `docs/specs/` and this file fell under `merge:self` | `docs/specs/` is `merge:agent`; this build plan is `merge:human`. | yes |
 | D21 | U1: which of several state labels stays | The state the dispatcher last recorded; without a record, the earliest in life order. | yes |
-| D22 | U2: "oldest first" and what counts against the slot limit | Lowest issue number first. `in-progress` and `in-review` hold a slot; only a start from `ready` waits. | yes |
+| D22 | U2: "oldest first" and what counts against the slot limit | Lowest issue number first. `in-progress` and `in-review` hold a slot; only a start from `ready` or a resumed implementation waits (D47). | yes |
 | D23 | U3: Definition of Ready items 5 to 7 have no label | Triage's result (checked, estimate) is a dispatcher record. Dependencies are GitHub's "blocked by" relations or `Depends on #N` lines in the marked section. | yes |
 | D24 | U4: what "changes what an issue asks for" means | The issue body outside the marked section changes. Title edits don't count. | yes |
 | D25 | U5: "stop at their next step" can't be observed | Every hard limit is also bounded by what's left of the month, less what running sessions may still spend. | yes |
 | D26 | U6: nothing stops agents creating labels | GitHub doesn't record who created a label, and Issues write lets the App create them. The dispatcher removes a label outside `cloud/labels.json` from any issue the agent identity added it to, and comments why (phase 3). | yes |
 | D27 | U7: scout cost "on its issue", but a scout run has no issue | Scout cost goes on the status issue. | yes |
 | D28 | U8: which owner actions end a wait | A comment by the owner resumes a waiting issue. The owner's label changes, edits and closing act as themselves (approve, re-triage, drop). | yes |
-| D29 | U9: `approved` before a spec exists | `approved` counts in `needs-approval`, and on a `direct` issue held only by an objection. Elsewhere the dispatcher removes it and says when to approve. | yes |
+| D29 | U9: `approved` before a spec exists | `approved` counts in `needs-approval` and on an issue held by an objection (D45), and stays while the spec it approved is unchanged (D44). Elsewhere the dispatcher removes it and says when to approve. | yes |
 | D30 | U10: an owner comment on `needs-approval` | It sends the issue back to `refining` for a revised spec. `approved`, when present too, wins. | yes |
 | D31 | U11: who sets state labels | Only the dispatcher and the owner. An agent's state-label change is reverted; agents report and the dispatcher acts. The owner's change is accepted, and the Definition of Ready still applies before implementation. | yes |
 | D32 | U12: several route or merge labels | The highest merge class and the route with the most process stay. | yes |
@@ -109,7 +109,15 @@ A review of the workflow document and the spec before phase 0 found contradictio
 | D40 | Definition of Ready failures | Commented once per distinct set of failing items, not on every event. | yes |
 | D41 | Which issue a pull request belongs to | The issue its body closes ("Closes #N" and GitHub's synonyms). | yes |
 | D42 | No scheduled reconcile in phase 2 | A reconcile of all open issues is started by hand (`dispatch`, Run workflow, empty issue). A schedule comes with phase 3, when a lost session matters. | yes |
-| D43 | Order of the owner's setup | The App with Contents write is installed only after the ruleset on `main` is enforced, so no agent can ever push to `main` directly. | yes |
+| D43 | Order of the owner's setup | The App with Contents write is installed only after the ruleset on `main` is enforced, so no agent can ever push to `main` directly. Check with `gh api repos/DeNic0la/Agents/rules/branches/main`: while it returns an empty list, nothing protects `main`. | yes |
+| D44 | An approval given in `needs-approval`, then a wait | An approval stays while the spec it approved is unchanged; the dispatcher records the spec's digest with it. When the issue later waits in `needs-answer`, `approved` stays; when the spec changes, the dispatcher removes it and says so. An `approved` added before any approval was due is removed (D29). | best guess |
+| D45 | CW-41 on an issue that isn't `direct` | The owner's `approved` overrides an objection on any route: `objection` is removed and "approved over objection" commented. A `direct` issue is then `ready`; any other goes back to the agent that objected (`triage` or `refining`), and the spec it writes still needs the owner's `approved` in `needs-approval`. | best guess |
+| D46 | CW-13 when an agent changes a guarded label twice | Each guarded label is set back to what the last change by the owner or the dispatcher left, not by undoing only the last change: an agent adding and then removing `approved` neither leaves an approval the owner never gave nor removes one the owner gave. For merge classes a raise by anyone counts (CW-67). | best guess |
+| D47 | CW-12 for a resumed implementation, and several issues in one run | A dispatcher run first moves every issue's state, then hands out the free implementation slots, lowest issue number first. An issue the owner's answer sends back to `in-progress` waits for a free slot like a start from `ready`, and waits in `ready` meanwhile. A `paused` issue takes no slot. | best guess |
+| D48 | An external issue edited after the owner let it in | The author's edit removes `approved` and sends the issue to `needs-answer` for the owner, whose comment triages the text as it is then (D37). An outsider's edit never starts a session by itself. | best guess |
+| D49 | Two `dispatch` runs at once | All `dispatch` runs share one concurrency group, so two runs never hand out the same slot. A newer pending run replaces an older one, so every run also reconciles the open issues changed in the last 30 minutes, every `ready` issue, and closed issues that still carry labels to clean. | best guess |
+| D50 | `merge-gate` on reviews | A `pull_request_review` run uses the pull request's own copy of the workflow, so a pull request could change its gate. `review-relay` runs on reviews with no permissions and no code; `merge-gate` runs on its `workflow_run` and on `pull_request_target`, both from the default branch. The status belongs to a commit: it's green only when every open pull request at that commit passes. Reviews reach the gate only once both files are on `main`. | best guess |
+| D51 | The Claude GitHub App (`claude[bot]`, `anthropics/claude-code-action`), which the owner installed | It's the owner's interactive assistant: it answers the owner's `@claude` mentions and reviews the owner's pull requests, billed to the owner's subscription. It isn't the agent identity (step 5) and doesn't run the cloud sessions, which keep the workspace key and its cap (D1, D4). The rules treat it like any other actor: its comments end no wait and its label changes are reverted. It holds Contents write while `main` is unprotected, against D43's order, so its workflows run only for the owner. | best guess |
 
 ## Design
 
@@ -158,7 +166,7 @@ Each phase ends with something that can be checked on a test issue. Every change
 |---|---|---|
 | 0 | Answered (next section). The owner's steps are open. | The steps in [What the owner does by hand](#what-the-owner-does-by-hand) are done; Settings, Secrets and variables, Actions lists `ANTHROPIC_API_KEY`, `AGENT_APP_PRIVATE_KEY` and the variable `AGENT_APP_ID`. |
 | 1 | Built, not merged. | Locally: `node --test "tests/*.test.js"`. After the merge: the `ci` check runs on a pull request with a Linux job and two Windows jobs; Actions, `labels`, Run workflow creates the labels (a second run changes nothing); the ruleset is applied and a pull request can't merge before `ci` and `merge-gate` are green. |
-| 2 | Built, not merged. | Locally: `node --test "tests/*.test.js"` (the test names carry the CW numbers). After the merge: open a test issue; within a minute the `dispatch` run comments "Dry run. The dispatcher would: add `origin:owner`, `triage` … start the triage agent with a hard limit of $1.00"; comment on it, and no second identical comment appears. |
+| 2 | Built, not merged; review fixes D44 to D50 applied. | Locally: `node --test "tests/*.test.js"` (the test names carry the CW and D numbers). After the merge, approving a pull request starts `review-relay` and then `merge-gate`. After the merge: open a test issue; within a minute the `dispatch` run comments "Dry run. The dispatcher would: add `origin:owner`, `triage` … start the triage agent with a hard limit of $1.00"; comment on it, and no second identical comment appears. |
 | 3 to 10 | Not started. | |
 
 ## Phase 0: to confirm before building
@@ -192,4 +200,5 @@ In this order. None of it is needed before merging phases 1 and 2; steps 4 to 6 
    - Note the App ID and store it as the repository variable `AGENT_APP_ID` (Settings, Secrets and variables, Actions, Variables).
    - Generate a private key. Paste the whole `.pem` file into the repository secret `AGENT_APP_PRIVATE_KEY`, then delete the file. Don't keep it in a synced folder.
    - Install App, only select repositories, `Agents`.
+   - The Claude GitHub App (`/install-github-app`, acting as `claude[bot]`) is a different App and doesn't do this step (D51).
 6. **Stop switch, ready to use.** Settings, Secrets and variables, Actions, Variables: create `CLOUD_STOPPED` with the value `false`. Setting it to `true` stops all starts.

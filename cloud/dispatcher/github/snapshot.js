@@ -29,14 +29,23 @@ function mapTimeline(raw) {
   return out;
 }
 
-// Pull requests that mention the issue, newest first.
-function referencingPulls(raw) {
+// The repository "owner/name" of an issue or pull request in a timeline source.
+const repoOf = (issue) => {
+  if (issue.repository && issue.repository.full_name) return issue.repository.full_name;
+  const m = /\/repos\/([^/]+\/[^/]+)$/.exec(issue.repository_url || '');
+  return m ? m[1] : null;
+};
+
+// Pull requests of this repository that mention the issue, newest first. A reference
+// from another repository is skipped: its number means nothing here.
+function referencingPulls(raw, repo) {
   const seen = new Set();
   const out = [];
   for (let i = (raw || []).length - 1; i >= 0; i--) {
     const e = raw[i];
     const src = e.event === 'cross-referenced' && e.source && e.source.issue;
     if (!src || !src.pull_request || seen.has(src.number)) continue;
+    if (repo && repoOf(src) && repoOf(src).toLowerCase() !== repo.toLowerCase()) continue;
     seen.add(src.number);
     out.push(src.number);
   }
@@ -52,6 +61,7 @@ function mapIssue(issue) {
     body: issue.body || '',
     labels: labelNames(issue.labels),
     isPull: Boolean(issue.pull_request),
+    updatedAt: issue.updated_at || null,
   };
 }
 
@@ -77,7 +87,7 @@ async function loadIssueView(client, number) {
   }
 
   let pull = null;
-  for (const n of referencingPulls(raw)) {
+  for (const n of referencingPulls(raw, client.repo)) {
     const pr = await client.request('GET', `${r}/pulls/${n}`);
     if (!closingIssues(pr.body).includes(number)) continue;
     const closedBy = pr.state === 'closed' ? loginOf((await client.request('GET', `${r}/issues/${n}`)).closed_by) : null;
@@ -98,4 +108,10 @@ async function listOpenIssues(client) {
   return all.map(mapIssue).filter((i) => !i.isPull);
 }
 
-module.exports = { mapTimeline, referencingPulls, mapIssue, loadIssueView, listOpenIssues };
+// Issues closed since `since` (ISO time): a closed issue may still carry labels to clean.
+async function listClosedSince(client, since) {
+  const all = await client.paginate(`/repos/${client.repo}/issues?state=closed&since=${encodeURIComponent(since)}`);
+  return all.map(mapIssue).filter((i) => !i.isPull);
+}
+
+module.exports = { mapTimeline, referencingPulls, mapIssue, loadIssueView, listOpenIssues, listClosedSince };

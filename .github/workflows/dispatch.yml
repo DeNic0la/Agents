@@ -23,10 +23,11 @@ permissions:
   issues: write
   pull-requests: read
 
-# One run per issue at a time. A newer pending run replaces an older one, which is
-# safe because every run reads the issue's whole state.
+# One run at a time across all issues, so two runs never hand out the same free slot
+# (D47, D49). A newer pending run replaces an older one; each run also reconciles every
+# issue changed in the last 30 minutes, so what the replaced run would have done is not lost.
 concurrency:
-  group: dispatch-${{ github.event.issue.number || github.event.pull_request.number || inputs.issue || 'all' }}
+  group: dispatch
   cancel-in-progress: false
 
 jobs:

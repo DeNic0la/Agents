@@ -72,3 +72,45 @@ test('reviews by others never count', () => {
 test('the description stays within 140 characters', () => {
   for (const r of [gate([]), gate([], { author: owner })]) assert.ok(r.description.length <= 140);
 });
+
+// ---- D50: one status per commit, judged from the default branch ---------------------
+
+const { gateAtSha, pullsAtSha } = require(path.join(__dirname, '..', 'cloud/dispatcher/decide/merge-gate.js'));
+const { targetOf } = require(path.join(__dirname, '..', 'cloud/dispatcher/merge-gate.js'));
+const fs = require('fs');
+
+const ok = { state: 'success', description: 'Approved by the owner' };
+const waiting = { state: 'pending', description: "Waiting for the owner's approval" };
+
+test('D50: a commit shared by two pull requests passes only when both pass', () => {
+  assert.equal(gateAtSha([{ number: 3, result: ok }, { number: 5, result: ok }]).state, 'success');
+  const r = gateAtSha([{ number: 3, result: ok }, { number: 5, result: waiting }]);
+  assert.equal(r.state, 'pending');
+  assert.match(r.description, /^#5: /);
+  assert.deepEqual(gateAtSha([{ number: 3, result: ok }]), ok);
+  assert.equal(gateAtSha([]).state, 'pending');
+});
+
+test('D50: only open pull requests whose head is the commit are judged', () => {
+  const pulls = [
+    { number: 1, state: 'open', head: { sha: 'a' } },
+    { number: 2, state: 'closed', head: { sha: 'a' } },
+    { number: 3, state: 'open', head: { sha: 'b' } },
+  ];
+  assert.deepEqual(pullsAtSha(pulls, 'a').map((p) => p.number), [1]);
+});
+
+test('D50: every trigger is reduced to a head commit', () => {
+  assert.deepEqual(targetOf('workflow_run', { workflow_run: { head_sha: 'abc', pull_requests: [] } }), { sha: 'abc', number: null });
+  assert.deepEqual(targetOf('pull_request_target', { pull_request: { number: 4, head: { sha: 'def' } } }), { sha: 'def', number: 4 });
+  assert.deepEqual(targetOf('workflow_dispatch', { inputs: { pr: '7' } }), { sha: null, number: 7 });
+  assert.throws(() => targetOf('workflow_dispatch', { inputs: {} }));
+});
+
+test('D50: the review relay holds no permissions and merge-gate never runs on pull_request_review', () => {
+  const wf = (name) => fs.readFileSync(path.join(__dirname, '..', '.github/workflows', name), 'utf8');
+  assert.match(wf('review-relay.yml'), /^permissions: \{\}$/m);
+  assert.doesNotMatch(wf('review-relay.yml'), /uses:|checkout|secrets\./);
+  assert.doesNotMatch(wf('merge-gate.yml'), /^\s+pull_request_review:/m);
+  assert.match(wf('merge-gate.yml'), /workflows: \[review-relay\]/);
+});

@@ -16,7 +16,7 @@ const { startableQueue, checkReady } = req('decide/ready.js');
 const { unsetCaps, settingsProblems } = req('decide/settings.js');
 const { requestsFor, dryRunComment, planHash } = req('github/apply.js');
 const { mapTimeline, referencingPulls, mapIssue } = req('github/snapshot.js');
-const { focusIssues, loadSettings } = req('cli.js');
+const { focusIssues, reconcileTargets, loadSettings } = req('cli.js');
 
 const OWNER = 'owner';
 const AGENT = 'agent[bot]';
@@ -208,8 +208,55 @@ test('CW-11: without a record, the state removed before needs-answer is restored
     body: withSpec(),
     labels,
     timeline: [...labels.slice(0, 4).map((l) => ev.label(l, l === 'approved' ? OWNER : BOT)), ev.record({ ...TRIAGED, approvedSpec: digest(SPEC) }), ev.unlabel('in-progress', OWNER), ev.label('needs-answer', OWNER), ev.comment(OWNER, 'go on')],
-  }));
+  }), { queue: [1] });
   assert.equal(p.state, 'in-progress');
+});
+
+// D44, D47: answering a question during implementation keeps the approval, and the
+// implementation goes on only when a slot is free.
+const askedDuringWork = () => {
+  const labels = ['origin:owner', 'route:lean', 'merge:agent', 'approved', 'needs-answer'];
+  return view({
+    body: withSpec(),
+    labels,
+    timeline: [
+      ...labels.slice(0, 4).map((l) => ev.label(l, l === 'approved' ? OWNER : BOT)),
+      ev.label('needs-answer', BOT),
+      ev.record({ ...TRIAGED, state: 'needs-answer', approvedSpec: digest(SPEC), waiting: { from: 'in-progress', reason: 'question' } }),
+      ev.comment(OWNER, 'Use the existing parser.'),
+    ],
+  });
+};
+
+test('D44: an approval given for the current spec survives needs-answer', () => {
+  const p = decide(askedDuringWork(), { queue: [1] });
+  assert.equal(p.state, 'in-progress');
+  assert.ok(!p.remove.includes('approved'), JSON.stringify(p.visible));
+  assert.equal(p.start.role, 'implement');
+});
+
+test('D44: in needs-answer, approved for a spec that has changed since is removed', () => {
+  const p = decide({ ...askedDuringWork(), body: withSpec('Goal: something else.') }, { queue: [1] });
+  assert.ok(p.remove.includes('approved'));
+  assert.match(p.say.join(' '), /spec changed after approval/);
+});
+
+test('D47: a resumed implementation without a free slot waits in ready', () => {
+  const p = decide(askedDuringWork(), { queue: [] });
+  assert.equal(p.state, 'ready');
+  assert.equal(p.start, null);
+  assert.match(p.notes.join(' '), /free implementation slot/);
+});
+
+test('D47: one run hands the free slots to resumed and ready issues lowest number first', () => {
+  const plans = decideAll([readyView({ number: 3 }), { ...askedDuringWork(), number: 2 }, readyView({ number: 4 })], ctx({ activeElsewhere: 1 }));
+  assert.deepEqual(plans.map((p) => [p.number, p.state, Boolean(p.start)]), [[2, 'in-progress', true], [3, 'ready', false], [4, 'ready', false]]);
+});
+
+test('D47: a paused ready issue takes no slot', () => {
+  const s = settings();
+  const ready = [3, 5].map((number) => ({ number, labels: ['origin:owner', 'route:lean', 'merge:agent', 'approved', 'ready', ...(number === 3 ? ['paused'] : [])], record: TRIAGED, dependencies: [] }));
+  assert.deepEqual(startableQueue(ready, 1, s), [5]);
 });
 
 // ---- CW-12: one session per issue, limited implementations --------------------------
@@ -279,6 +326,19 @@ test('CW-13, U11: an agent moving the state label is reverted; the owner moving 
   const byOwner = decide(view({ labels: [...labels, 'needs-approval'], timeline: [...base, ev.unlabel('refining', OWNER), ev.label('needs-approval', OWNER)] }));
   assert.deepEqual(byOwner.add, []);
   assert.deepEqual(byOwner.remove, []);
+});
+
+test('D46: an approval an agent added and removed again is not restored', () => {
+  const labels = ['origin:owner', 'route:lean', 'merge:agent', 'needs-approval'];
+  const p = decide(view({ body: withSpec(), labels, timeline: [...labels.map((l) => ev.label(l, BOT)), ev.record({ ...TRIAGED, state: 'needs-approval' }), ev.label('approved', AGENT), ev.unlabel('approved', AGENT)] }));
+  assert.ok(!p.add.includes('approved'), JSON.stringify(p.visible));
+});
+
+test('D46: an approval the owner gave and an agent removed is restored', () => {
+  const labels = ['origin:owner', 'route:lean', 'merge:agent', 'ready'];
+  const p = decide(view({ body: withSpec(), labels, timeline: [...labels.map((l) => ev.label(l, BOT)), ev.label('approved', OWNER), ev.record({ ...TRIAGED, state: 'ready', approvedSpec: digest(SPEC) }), ev.unlabel('approved', AGENT)] }));
+  assert.ok(p.add.includes('approved'));
+  assert.match(p.say[0], /restored `approved` \(removed by @agent\[bot\]\)/);
 });
 
 test('U12, CW-22: duplicate route and merge labels are reduced, and route:direct needs origin:owner', () => {
@@ -421,6 +481,31 @@ test('CW-41: a direct issue waiting on an objection becomes ready when the owner
   assert.equal(p.start.role, 'implement');
 });
 
+test('D45, scenario 5: approved over an objection on a lean issue sends it back to the objecting agent', () => {
+  const labels = ['origin:owner', 'route:lean', 'merge:agent', 'objection', 'needs-answer'];
+  const p = decide(view({ labels: [...labels, 'approved'], timeline: [...labels.map((l) => ev.label(l, BOT)), ev.record({ ...TRIAGED, state: 'needs-answer', waiting: { from: 'refining', reason: 'objection' } }), ev.label('approved', OWNER)] }));
+  assert.equal(p.state, 'refining');
+  assert.deepEqual(p.remove.sort(), ['approved', 'needs-answer', 'objection']);
+  assert.match(p.say.join(' '), /Approved over objection/);
+  assert.equal(p.record.objectionOverridden, true);
+  assert.equal(p.start.role, 'refine');
+});
+
+test('D48: the author changing an external issue after the owner let it in sends it back to the owner', () => {
+  const labels = ['origin:external', 'route:lean', 'merge:agent', 'refining'];
+  const p = decide(view({ author: STRANGER, body: 'Something else now.', labels, timeline: [...labels.map((l) => ev.label(l, BOT)), ev.record({ ...TRIAGED, state: 'refining' })] }));
+  assert.equal(p.state, 'needs-answer');
+  assert.deepEqual(p.record.waiting, { from: 'triage', reason: 'external' });
+  assert.equal(p.start, null);
+});
+
+test('D37: an owner issue edited while waiting is triaged again once the owner answers', () => {
+  const labels = ['origin:owner', 'route:lean', 'merge:agent', 'needs-answer'];
+  const p = decide(view({ body: 'A new ask.', labels, timeline: [...labels.map((l) => ev.label(l, BOT)), ev.record({ ...TRIAGED, state: 'needs-answer', waiting: { from: 'refining', reason: 'question' } }), ev.comment(OWNER, 'see the new text')] }));
+  assert.equal(p.state, 'triage');
+  assert.equal(p.start.role, 'triage');
+});
+
 test('CW-42: a change to the marked section after approval removes approved and returns to needs-approval', () => {
   const p = decide(readyView({ body: withSpec('Goal: something else entirely.') }), { queue: [1] });
   assert.deepEqual(p.remove.sort(), ['approved', 'ready']);
@@ -548,9 +633,14 @@ test('snapshot: referencing pull requests come newest first, issues are skipped'
   assert.deepEqual(referencingPulls([xref(3, true), xref(4, false), xref(5, true), xref(3, true)]), [3, 5]);
 });
 
+test('snapshot: a pull request in another repository that mentions the issue is skipped', () => {
+  const xref = (number, repo) => ({ event: 'cross-referenced', source: { issue: { number, pull_request: {}, repository_url: `https://api.github.com/repos/${repo}` } } });
+  assert.deepEqual(referencingPulls([xref(3, 'o/r'), xref(7, 'someone/fork'), xref(8, 'O/R')], 'o/r'), [8, 3]);
+});
+
 test('snapshot: an issue maps to its number, author, labels and kind', () => {
   assert.deepEqual(mapIssue({ number: 2, state: 'open', user: { login: OWNER }, body: null, labels: [{ name: 'triage' }, 'paused'], pull_request: { url: 'x' } }), {
-    number: 2, state: 'open', stateReason: null, author: OWNER, body: '', labels: ['triage', 'paused'], isPull: true,
+    number: 2, state: 'open', stateReason: null, author: OWNER, body: '', labels: ['triage', 'paused'], isPull: true, updatedAt: null,
   });
 });
 
@@ -562,6 +652,21 @@ test('cli: events map to the issues they concern', () => {
   assert.deepEqual(focusIssues('workflow_dispatch', { inputs: { issue: '12' } }), [12]);
   assert.equal(focusIssues('workflow_dispatch', { inputs: { issue: '' } }), 'all');
   assert.deepEqual(focusIssues('push', {}), []);
+});
+
+test('D49: a run also reconciles recently changed issues, ready issues and recently closed ones with labels left', () => {
+  const now = Date.parse('2026-11-16T12:00:00Z');
+  const at = (min) => new Date(now - min * 60000).toISOString();
+  const open = [
+    { number: 1, labels: ['triage'], updatedAt: at(5) },
+    { number: 2, labels: ['ready'], updatedAt: at(600) },
+    { number: 3, labels: ['in-progress'], updatedAt: at(600) },
+    { number: 4, labels: ['refining'], updatedAt: at(600) },
+    { number: 7, labels: ['in-review'], updatedAt: at(1) },
+  ];
+  const closed = [{ number: 5, labels: ['approved'], updatedAt: at(2) }, { number: 6, labels: [], updatedAt: at(2) }];
+  assert.deepEqual(reconcileTargets({ focus: [4], open, closed, now }), { numbers: [1, 2, 4, 5, 7], activeElsewhere: 1 });
+  assert.deepEqual(reconcileTargets({ focus: 'all', open, closed: [], now }).activeElsewhere, 0);
 });
 
 // ---- Settings -----------------------------------------------------------------------
@@ -592,4 +697,17 @@ test('settings: amounts live only in cloud/settings.json, not in the dispatcher 
     const text = fs.readFileSync(f, 'utf8');
     assert.doesNotMatch(text, /(Usd|USD|\$)\s*[:=]?\s*\d+(\.\d+)?\b(?!\})/, `${path.relative(root, f)} has an amount`);
   }
+});
+
+// ---- The Claude GitHub App: an assistant, not an actor the rules trust (D51) --------
+
+test('D51: claude[bot] neither answers for the owner nor approves', () => {
+  const CLAUDE = 'claude[bot]';
+  const labels = ['origin:owner', 'route:lean', 'merge:agent', 'needs-answer'];
+  const waiting = decide(view({ labels, timeline: [...labels.map((l) => ev.label(l, BOT)), ev.record({ ...TRIAGED, state: 'needs-answer', waiting: { from: 'refining', reason: 'question' } }), ev.comment(CLAUDE, 'Here is an answer.')] }));
+  assert.ok(waiting.isEmpty, JSON.stringify(waiting.visible));
+  const approval = ['origin:owner', 'route:lean', 'merge:agent', 'needs-approval'];
+  const p = decide(view({ body: withSpec(), labels: [...approval, 'approved'], timeline: [...approval.map((l) => ev.label(l, BOT)), ev.record({ ...TRIAGED, state: 'needs-approval' }), ev.label('approved', CLAUDE)] }));
+  assert.deepEqual(p.remove, ['approved']);
+  assert.equal(p.start, null);
 });

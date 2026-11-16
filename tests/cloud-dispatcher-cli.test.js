@@ -30,7 +30,7 @@ function fakeGitHub(issues, timelines) {
         return send(201, {});
       }
       let m;
-      if (url.pathname === '/repos/o/r/issues') return send(200, issues);
+      if (url.pathname === '/repos/o/r/issues') return send(200, issues.filter((i) => i.state === (url.searchParams.get('state') || 'open')));
       if ((m = url.pathname.match(/^\/repos\/o\/r\/issues\/(\d+)$/))) {
         const issue = issues.find((i) => i.number === Number(m[1]));
         return issue ? send(200, issue) : send(404, { message: 'Not Found' });

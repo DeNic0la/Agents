@@ -17,7 +17,7 @@ const L = require('./labels');
 const { actorKind } = require('./actors');
 const { readRecord } = require('./markers');
 const { splitBody, digest } = require('./spec');
-const { checkReady, routeLabel } = require('./ready');
+const { checkReady, routeLabel, startableQueue } = require('./ready');
 const { unsetCaps } = require('./settings');
 const { Plan } = require('./plan');
 
@@ -54,22 +54,27 @@ function closeCleanup(plan) {
   for (const label of [...L.STATES, L.APPROVED, L.PAUSED, L.BUDGET_EXTEND]) plan.removeLabel(label);
 }
 
-// CW-13, U11: changes by anyone but the owner and the dispatcher are undone.
+// CW-13, U11: changes by anyone but the owner and the dispatcher are undone. Each guarded
+// label is put back to what the last trusted change left (D46), not by undoing only the
+// last change: an agent adding and then removing `approved` must not leave an approval
+// the owner never gave. For merge classes a raise by anyone also counts (CW-67).
 function revertUntrustedChanges(plan, view, settings) {
   const timeline = view.timeline || [];
+  const trusted = (e) => ['owner', 'dispatcher'].includes(actorKind(e.actor, settings));
   const reverted = [];
   for (const label of [...GUARDED, ...L.MERGES]) {
     const i = lastLabelEvent(timeline, label);
     if (i < 0) continue;
     const e = timeline[i];
-    const kind = actorKind(e.actor, settings);
-    if (kind === 'owner' || kind === 'dispatcher') continue;
-    const added = e.type === 'labeled';
-    if (added !== plan.has(label)) continue; // a later change we can't see yet; the next run sees it
-    if (added && L.MERGES.includes(label)) continue;
-    if (added) plan.removeLabel(label);
-    else plan.addLabel(label);
-    reverted.push(`${added ? 'removed' : 'restored'} ${code(label)} (${added ? 'added' : 'removed'} by @${e.actor || 'unknown'})`);
+    if (trusted(e)) continue;
+    if ((e.type === 'labeled') !== plan.has(label)) continue; // a later change we can't see yet; the next run sees it
+    const isMerge = L.MERGES.includes(label);
+    const authorized = lastIndex(timeline, (x) => (x.type === 'labeled' || x.type === 'unlabeled') && x.label === label && (trusted(x) || (isMerge && x.type === 'labeled')));
+    const shouldHave = authorized >= 0 && timeline[authorized].type === 'labeled';
+    if (shouldHave === plan.has(label)) continue;
+    if (shouldHave) plan.addLabel(label);
+    else plan.removeLabel(label);
+    reverted.push(`${shouldHave ? 'restored' : 'removed'} ${code(label)} (${e.type === 'labeled' ? 'added' : 'removed'} by @${e.actor || 'unknown'})`);
   }
   if (reverted.length) {
     plan.say.push(`Reverted: ${reverted.join('; ')}. Only the owner sets state, origin, \`approved\`, \`budget:extend\` and \`paused\`, and only the owner lowers a merge class.`);
@@ -142,6 +147,36 @@ function retriage(plan, facts) {
   plan.say.push('The request changed: triaged again, without `approved`.');
 }
 
+// D48: the author of an external issue changed the request after the owner let it in.
+// The owner decides again, so an outsider's edits never start a session by themselves.
+function externalEdit(plan, facts) {
+  plan.removeLabel(L.APPROVED);
+  plan.remember({ ask: facts.askDigest, triage: null, approvedSpec: null, dorFailing: null });
+  toNeedsAnswer(plan, 'triage', 'external', 'The request changed after the owner let it in.');
+}
+
+// An approval the owner gave earlier, for the spec as it stands now (D44).
+const approvalStands = (facts) => Boolean(facts.record.approvedSpec) && facts.record.approvedSpec === facts.specDigest;
+const askChanged = (facts) => Boolean(facts.record.ask) && facts.record.ask !== facts.askDigest;
+
+// CW-41, scenario 5, D45: the owner's `approved` overrides an objection. A `direct` issue
+// is then ready; any other goes back to the agent that objected, which goes on without the
+// objection, and the spec it writes still needs the owner's approval.
+function overrideObjection(plan, facts, waiting) {
+  plan.removeLabel(L.OBJECTION);
+  plan.remember({ waiting: null, objectionOverridden: true });
+  if (plan.has('route:direct')) {
+    plan.setState('ready');
+    plan.remember({ approvedSpec: facts.specDigest });
+    plan.say.push('Approved over objection. The owner\'s approval overrides the objection; the issue is `ready`.');
+    return;
+  }
+  const from = ['triage', 'refining'].includes(waiting.from) ? waiting.from : 'triage';
+  plan.removeLabel(L.APPROVED);
+  plan.setState(from);
+  plan.say.push(`Approved over objection. The objection is set aside and the issue goes back to ${code(from)}; the spec it gets still needs the owner's \`approved\` in \`needs-approval\`.`);
+}
+
 // The state a waiting issue returns to: the dispatcher's record, or else the state
 // label removed last before `needs-answer` came, or else `triage`.
 function cameFrom(view, facts, since) {
@@ -161,23 +196,26 @@ function handleNeedsAnswer(plan, view, facts, settings) {
   const timeline = view.timeline || [];
   const since = lastLabelEvent(timeline, 'needs-answer', 'labeled');
   const waiting = cameFrom(view, facts, since);
-  if (plan.has(L.APPROVED)) {
-    if (plan.has('route:direct') && plan.has(L.OBJECTION)) {
-      plan.removeLabel(L.OBJECTION);
-      plan.setState('ready');
-      plan.remember({ waiting: null, approvedSpec: facts.specDigest });
-      plan.say.push('Approved over objection. The owner\'s approval overrides the objection; the issue is `ready`.');
-      return;
-    }
+  if (plan.has(L.APPROVED) && plan.has(L.OBJECTION)) return overrideObjection(plan, facts, waiting);
+  if (plan.has(L.APPROVED) && !approvalStands(facts)) {
     plan.removeLabel(L.APPROVED);
-    plan.say.push('Removed `approved`: it counts once the spec is complete and the issue waits in `needs-approval`. To let work go on here, comment.');
+    if (facts.record.approvedSpec) {
+      plan.remember({ approvedSpec: null });
+      plan.say.push('The spec changed after approval: `approved` removed.');
+    } else {
+      plan.say.push('Removed `approved`: it counts once the spec is complete and the issue waits in `needs-approval`, or to override an objection. To let work go on here, comment.');
+    }
   }
-  if (!ownerActedAfter(timeline, since, settings)) return;
+  if (!ownerActedAfter(timeline, since, settings)) return undefined;
+  // D37: an issue edited while it waited is triaged as it is now.
+  if (askChanged(facts)) return retriage(plan, facts);
   const from = ['needs-answer', 'needs-approval'].includes(waiting.from) ? 'triage' : waiting.from;
   plan.setState(from);
-  // The ask an external issue had while it waited is what triage now looks at.
+  // D47: a resumed implementation waits for a free slot like a start from `ready`.
+  if (from === 'in-progress') plan.resumed = true;
   plan.remember({ waiting: null, ask: facts.askDigest });
   plan.say.push(`The owner answered: back to ${code(from)}.`);
+  return undefined;
 }
 
 // CW-40, CW-41, U10.
@@ -195,6 +233,7 @@ function handleNeedsApproval(plan, view, facts, settings) {
   }
   const since = lastLabelEvent(timeline, 'needs-approval', 'labeled');
   if (ownerActedAfter(timeline, since, settings)) {
+    if (askChanged(facts)) return retriage(plan, facts);
     plan.setState('refining');
     plan.say.push('The owner commented without approving: back to `refining` to revise the spec.');
   }
@@ -285,7 +324,8 @@ function startAgent(plan, view, facts, ctx) {
       return;
     }
     if (facts.record.dorFailing) plan.remember({ dorFailing: null });
-    if (state === 'ready' && !(ctx.queue || []).includes(view.number)) {
+    if ((state === 'ready' || plan.resumed) && !(ctx.queue || []).includes(view.number)) {
+      if (plan.resumed) plan.setState('ready');
       plan.notes.push(`waits for a free implementation slot (${ctx.settings.parallelImplementations} at a time, lowest issue number first)`);
       return;
     }
@@ -302,32 +342,54 @@ function startAgent(plan, view, facts, ctx) {
   return undefined;
 }
 
-function decideIssue(view, ctx) {
+// Everything but starting an agent: labels repaired, the state moved. `final` means
+// nothing may start for this view.
+function decideState(view, ctx) {
   const { settings } = ctx;
   const plan = new Plan(view.number, view.labels);
   const facts = readFacts(view, settings);
   plan.lastDryRun = facts.lastDryRun;
-  if (view.isPull || actorKind(view.author, settings) === 'dispatcher') return plan;
+  if (view.isPull || actorKind(view.author, settings) === 'dispatcher') return { plan, facts, view, final: true };
   if (view.state === 'closed') {
     closeCleanup(plan);
-    return plan;
+    return { plan, facts, view, final: true };
   }
   revertUntrustedChanges(plan, view, settings);
   repairLabels(plan, view, facts, settings);
 
   const timeline = view.timeline || [];
   const reopened = lastIndex(timeline, (e) => e.type === 'reopened') > (facts.at.intake ?? -1);
-  const waitingForOwner = plan.state === 'needs-answer' && facts.record.waiting && facts.record.waiting.reason === 'external';
+  const external = plan.has(L.ORIGIN.external);
+  const waiting = ['needs-answer', 'needs-approval'].includes(plan.state);
   if (!plan.state || reopened) intake(plan, view, facts, reopened);
-  else if (facts.record.ask && facts.record.ask !== facts.askDigest && !waitingForOwner) retriage(plan, facts);
+  else if (askChanged(facts) && waiting) handleState(plan, view, facts, settings); // D37: the owner acts first
+  else if (askChanged(facts) && external) externalEdit(plan, facts);
+  else if (askChanged(facts)) retriage(plan, facts);
   else handleState(plan, view, facts, settings);
-
-  startAgent(plan, view, facts, ctx);
-  return plan;
+  return { plan, facts, view, final: false };
 }
 
-// Decides every view in issue-number order. The queue in the context is shared, so
-// one run never starts more implementations than there are free slots.
-const decideAll = (views, ctx) => [...views].sort((a, b) => a.number - b.number).map((v) => decideIssue(v, ctx));
+function decideIssue(view, ctx) {
+  const staged = decideState(view, ctx);
+  if (!staged.final) startAgent(staged.plan, view, staged.facts, ctx);
+  return staged.plan;
+}
 
-module.exports = { decideIssue, decideAll, readFacts, ROLE_FOR_STATE };
+const ACTIVE = ['in-progress', 'in-review'];
+
+// Decides every view in issue-number order, in two passes (D47): first every state moves,
+// then the free implementation slots go to the issues that are `ready` or resumed now,
+// lowest number first. `ctx.activeElsewhere` counts the active issues not among the views.
+function decideAll(views, ctx) {
+  const staged = [...views].sort((a, b) => a.number - b.number).map((v) => decideState(v, ctx));
+  const live = staged.filter((s) => !s.final);
+  const active = Number(ctx.activeElsewhere || 0) + live.filter((s) => ACTIVE.includes(s.plan.state) && !s.plan.resumed).length;
+  const candidates = live
+    .filter((s) => s.plan.state === 'ready' || s.plan.resumed)
+    .map((s) => ({ number: s.view.number, labels: [...s.plan.labels], record: { ...s.facts.record, ...s.plan.record }, dependencies: s.view.dependencies }));
+  const queue = startableQueue(candidates, active, ctx.settings);
+  for (const s of live) startAgent(s.plan, s.view, s.facts, { ...ctx, queue });
+  return staged.map((s) => s.plan);
+}
+
+module.exports = { decideIssue, decideAll, decideState, readFacts, ROLE_FOR_STATE };
