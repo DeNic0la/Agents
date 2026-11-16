@@ -23,7 +23,7 @@ The dispatcher job starts the session with the repository mounted at `/workspace
 - the issue body and every comment, each inside a fence and marked with its author and whether that author is the owner, an agent, the dispatcher or someone else;
 - for review: the pull request, its diff stats and CI result; for implement after a review: the open findings.
 
-The session has git and the repository; it pushes only to `cloud/issue-<N>`. It has no GitHub API token. Comments, issues, the marked section of the issue body, pull requests and merges are made by the dispatcher job **as the agent identity**, from the session's result (decision D44). Labels for state are set by the dispatcher (D31).
+The session has git and the repository; it pushes only to `cloud/issue-<N>`. It has no GitHub API token. Comments, issues, the marked section of the issue body, pull requests and merges are made by the dispatcher job **as the agent identity**, from the session's result (decision D52). Labels for state are set by the dispatcher (D31).
 
 ## The result
 
