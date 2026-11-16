@@ -1,0 +1,29 @@
+{
+  "$comment": "Settings of the cloud development workflow (docs/specs/cloud-development-workflow.md, Settings). Changing this file is a merge:human change. Amounts are US dollars of list cost.",
+  "repository": "DeNic0la/Agents",
+  "owner": "DeNic0la",
+  "agentLogin": "denic0la-agents[bot]",
+  "dispatcherLogin": "github-actions[bot]",
+  "mode": "dry-run",
+  "caps": {
+    "monthlyUsd": 100,
+    "perIssueUsd": { "direct": 2, "lean": 8, "full": 25 },
+    "perRunUsd": { "triage": 1, "scout": 5 }
+  },
+  "agentPermissions": {
+    "metadata": "read",
+    "contents": "write",
+    "issues": "write",
+    "pull_requests": "write",
+    "checks": "read",
+    "statuses": "read",
+    "actions": "read"
+  },
+  "allowedHosts": ["github.com", "api.github.com", "codeload.github.com", "objects.githubusercontent.com", "api.anthropic.com"],
+  "parallelImplementations": 2,
+  "reviewRounds": 3,
+  "scout": { "schedule": "weekly", "issuesPerRun": 3 },
+  "typoSizeLines": 10,
+  "bigChange": { "lines": 400, "files": 15 },
+  "warningLevel": 0.8
+}

@@ -1,0 +1,22 @@
+[
+  { "name": "triage", "color": "0052cc", "description": "Waiting for the triage agent" },
+  { "name": "refining", "color": "1d76db", "description": "A spec is being written" },
+  { "name": "needs-answer", "color": "5319e7", "description": "The issue can't go on without the owner; the owner answers by commenting" },
+  { "name": "needs-approval", "color": "0e8a9f", "description": "The spec is complete and waits for the owner's yes (label approved)" },
+  { "name": "ready", "color": "2e9fd8", "description": "Meets the Definition of Ready; the dispatcher starts an implement agent" },
+  { "name": "in-progress", "color": "5ba8e6", "description": "An implement agent is building it" },
+  { "name": "in-review", "color": "93c5f0", "description": "A pull request is open" },
+  { "name": "origin:owner", "color": "0e8a16", "description": "Asked by the owner" },
+  { "name": "origin:agent", "color": "5cb85c", "description": "Asked by an agent" },
+  { "name": "origin:external", "color": "a8d8a0", "description": "Asked by anyone who is neither the owner nor an agent" },
+  { "name": "route:direct", "color": "6f42c1", "description": "Triage route: no refinement, straight to ready" },
+  { "name": "route:lean", "color": "8f6fd1", "description": "Triage route: lean refinement" },
+  { "name": "route:full", "color": "b39ddb", "description": "Triage route: full refinement" },
+  { "name": "merge:self", "color": "e99695", "description": "Merge class: the implement agent may merge once CI is green" },
+  { "name": "merge:agent", "color": "d93f0b", "description": "Merge class: the review agent may merge when it approves and CI is green" },
+  { "name": "merge:human", "color": "b60205", "description": "Merge class: only the owner merges" },
+  { "name": "approved", "color": "fbca04", "description": "Owner only: yes to implement the spec as written" },
+  { "name": "objection", "color": "f9a825", "description": "An agent advises against this issue; the reason is in a comment" },
+  { "name": "budget:extend", "color": "c5a300", "description": "Owner only: this issue may spend one more per-issue cap" },
+  { "name": "paused", "color": "6a737d", "description": "The issue reached its per-issue cap; resumes when the owner sets budget:extend" }
+]

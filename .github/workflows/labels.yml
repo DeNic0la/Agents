@@ -1,0 +1,21 @@
+name: labels
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Print the plan only
+        type: boolean
+        default: false
+
+permissions:
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: node cloud/sync-labels.js ${{ inputs.dry_run && '--dry-run' || '' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
