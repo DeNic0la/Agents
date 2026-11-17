@@ -212,8 +212,8 @@ test('CW-11: without a record, the state removed before needs-answer is restored
   assert.equal(p.state, 'in-progress');
 });
 
-// D44, D47: answering a question during implementation keeps the approval, and the
-// implementation goes on only when a slot is free.
+// D44, D22: answering a question during implementation keeps the approval, and the
+// implementation goes on in the slot it kept while it waited.
 const askedDuringWork = () => {
   const labels = ['origin:owner', 'route:lean', 'merge:agent', 'approved', 'needs-answer'];
   return view({
@@ -241,14 +241,30 @@ test('D44: in needs-answer, approved for a spec that has changed since is remove
   assert.match(p.say.join(' '), /spec changed after approval/);
 });
 
-test('D47: a resumed implementation without a free slot waits in ready', () => {
+test('D22: a resumed implementation goes on in the slot it kept, without queueing', () => {
   const p = decide(askedDuringWork(), { queue: [] });
-  assert.equal(p.state, 'ready');
-  assert.equal(p.start, null);
-  assert.match(p.notes.join(' '), /free implementation slot/);
+  assert.equal(p.state, 'in-progress');
+  assert.equal(p.start.role, 'implement');
+  assert.doesNotMatch(p.notes.join(' '), /free implementation slot/);
 });
 
-test('D47: one run hands the free slots to resumed and ready issues lowest number first', () => {
+test('D22, CW-12: a needs-answer issue that returns to in-progress holds its slot, so a ready issue waits', () => {
+  const unanswered = () => {
+    const v = askedDuringWork();
+    return { ...v, number: 2, timeline: v.timeline.filter((e) => !(e.type === 'commented' && e.body === 'Use the existing parser.')) };
+  };
+  const working = readyView({ number: 1, labels: ['origin:owner', 'route:lean', 'merge:agent', 'approved', 'in-progress'] });
+  const plans = decideAll([working, unanswered(), readyView({ number: 3 })], ctx({ running: new Set([1]) }));
+  assert.deepEqual(plans.map((p) => [p.number, p.state, Boolean(p.start)]), [[1, 'in-progress', false], [2, 'needs-answer', false], [3, 'ready', false]]);
+  assert.match(plans[2].notes.join(' '), /free implementation slot/);
+  // Waiting from refinement holds no slot.
+  const refining = unanswered();
+  refining.timeline = refining.timeline.map((e) => (e.body && e.body.includes('dispatcher-record') ? ev.record({ ...TRIAGED, state: 'needs-answer', waiting: { from: 'refining', reason: 'question' } }) : e));
+  const free = decideAll([working, refining, readyView({ number: 3 })], ctx({ running: new Set([1]) }));
+  assert.equal(free[2].state, 'in-progress');
+});
+
+test('D47, D22: one run hands the free slots to ready issues lowest number first, after the resumed ones', () => {
   const plans = decideAll([readyView({ number: 3 }), { ...askedDuringWork(), number: 2 }, readyView({ number: 4 })], ctx({ activeElsewhere: 1 }));
   assert.deepEqual(plans.map((p) => [p.number, p.state, Boolean(p.start)]), [[2, 'in-progress', true], [3, 'ready', false], [4, 'ready', false]]);
 });
@@ -666,6 +682,10 @@ test('D49: a run also reconciles recently changed issues, ready issues and recen
   ];
   const closed = [{ number: 5, labels: ['approved'], updatedAt: at(2) }, { number: 6, labels: [], updatedAt: at(2) }];
   assert.deepEqual(reconcileTargets({ focus: [4], open, closed, now }), { numbers: [1, 2, 4, 5, 7], activeElsewhere: 1 });
+  // D22: with a ready issue waiting, every needs-answer issue is read for the slot it may hold.
+  const asking = [...open, { number: 8, labels: ['needs-answer'], updatedAt: at(600) }];
+  assert.deepEqual(reconcileTargets({ focus: [], open: asking, closed: [], now }).numbers, [1, 2, 7, 8]);
+  assert.deepEqual(reconcileTargets({ focus: [], open: asking.filter((i) => i.number !== 2), closed: [], now }).numbers, [1, 7]);
   assert.deepEqual(reconcileTargets({ focus: 'all', open, closed: [], now }).activeElsewhere, 0);
 });
 
@@ -741,4 +761,36 @@ test('CW-16, D54: a session the dispatcher requested whose run is gone counts as
   const running = decide(view({ labels, timeline: timeline({ session: lost }) }), { running: new Set([1]) });
   assert.equal(running.start, null);
   assert.equal(running.record.failures, undefined);
+});
+
+// ---- Phase 4: refinement, questions and approval ----------------------------------------
+
+test('Scenario 6, CW-32, CW-35: a refine question waits for the owner, then the refine agent continues', () => {
+  const labels = ['origin:owner', 'route:lean', 'merge:agent', 'needs-answer'];
+  const base = [...labels.map((l) => ev.label(l, BOT)), ev.record({ ...TRIAGED, state: 'needs-answer', waiting: { from: 'refining', reason: 'question' } })];
+  const quiet = decide(view({ labels, timeline: base }));
+  assert.ok(quiet.isEmpty, JSON.stringify(quiet.visible));
+  const others = decide(view({ labels, timeline: [...base, ev.comment(STRANGER, 'Use Rust.'), ev.comment(AGENT, 'Also this.')] }));
+  assert.ok(others.isEmpty, JSON.stringify(others.visible));
+  const answered = decide(view({ labels, timeline: [...base, ev.comment(OWNER, 'Yes, as recommended.')] }));
+  assert.equal(answered.state, 'refining');
+  assert.deepEqual(answered.start, { role: 'refine', limitUsd: 8 });
+});
+
+test('CW-34, CW-35: a spec waiting for approval goes back to refining on the owner\'s comment only', () => {
+  const labels = ['origin:owner', 'route:lean', 'merge:agent', 'needs-approval'];
+  const base = [...labels.map((l) => ev.label(l, BOT)), ev.record({ ...TRIAGED, state: 'needs-approval', estimateUsd: 4 })];
+  const stranger = decide(view({ body: withSpec(), labels, timeline: [...base, ev.comment(STRANGER, 'Approve it!')] }));
+  assert.ok(stranger.isEmpty, JSON.stringify(stranger.visible));
+  const owner = decide(view({ body: withSpec(), labels, timeline: [...base, ev.comment(OWNER, 'Drop the second criterion.')] }));
+  assert.equal(owner.state, 'refining');
+  assert.equal(owner.start.role, 'refine');
+});
+
+test('DoR 7: the spec\'s estimate replaces triage\'s once there is one', () => {
+  const issue = (record) => ({ labels: ['route:lean', 'merge:agent', 'approved', 'ready'], record: { triage: { estimateUsd: 3 }, ...record } });
+  assert.equal(checkReady(issue({}), settings()).ok, true);
+  assert.deepEqual(checkReady(issue({ estimateUsd: 9 }), settings()).failing.map((f) => f.item), [7]);
+  assert.equal(checkReady(issue({ estimateUsd: 2, triage: { estimateUsd: 9 } }), settings()).ok, true);
+  assert.deepEqual(checkReady(issue({ triage: {} }), settings()).failing.map((f) => f.item), [7]);
 });

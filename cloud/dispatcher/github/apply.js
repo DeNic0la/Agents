@@ -3,7 +3,7 @@
 'use strict';
 
 const crypto = require('crypto');
-const { formatRecord, formatDryRun } = require('../decide/markers');
+const { formatRecord, formatDryRun, neutralizeMarkers } = require('../decide/markers');
 
 const ROLE_NAMES = { triage: 'triage', refine: 'refine', implement: 'implement', review: 'review' };
 const usd = (n) => `$${Number(n).toFixed(2)}`;
@@ -17,16 +17,17 @@ function dryRunComment(plan) {
   const lines = [];
   if (plan.add.length) lines.push(`- add ${plan.add.map(code).join(', ')}`);
   if (plan.remove.length) lines.push(`- remove ${plan.remove.map(code).join(', ')}`);
-  for (const s of plan.say) lines.push(`- comment: ${s}`);
+  for (const s of plan.say) lines.push(`- comment: ${neutralizeMarkers(s)}`);
   if (plan.start) lines.push(`- start the ${ROLE_NAMES[plan.start.role]} agent with a hard limit of ${usd(plan.start.limitUsd)}`);
   if (plan.close) lines.push(`- close the issue as ${plan.close.replace('_', ' ')}`);
-  for (const n of plan.notes) lines.push(`- start nothing: ${n}`);
+  for (const n of plan.notes) lines.push(`- start nothing: ${neutralizeMarkers(n)}`);
   if (!lines.length) return null;
   return `**Dry run.** The dispatcher would:\n\n${lines.join('\n')}\n\n${formatDryRun(planHash(plan))}`;
 }
 
 function liveComment(plan) {
-  const lines = [...plan.say];
+  // Said lines can quote an agent (CW-92); only the record below may carry a marker.
+  const lines = plan.say.map(neutralizeMarkers);
   if (plan.start) lines.push(`Starting the ${ROLE_NAMES[plan.start.role]} agent with a hard limit of ${usd(plan.start.limitUsd)}.`);
   const hasRecord = Object.keys(plan.record).length > 0;
   if (!lines.length && !hasRecord) return null;

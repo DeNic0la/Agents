@@ -21,6 +21,21 @@ function splitBody(body) {
   };
 }
 
+// The body with `spec` in its marked section. Everything outside the section stays as it
+// is, character for character (CW-8), so the ask's digest doesn't change.
+function withSpec(body, spec) {
+  const text = String(body || '');
+  const section = `${SPEC_START}\n${String(spec).trim()}\n${SPEC_END}`;
+  const start = text.indexOf(SPEC_START);
+  if (start < 0) {
+    const gap = text === '' || text.endsWith('\n\n') ? '' : text.endsWith('\n') ? '\n' : '\n\n';
+    return `${text}${gap}${section}\n`;
+  }
+  const end = text.indexOf(SPEC_END, start);
+  const stop = end < 0 ? text.length : end + SPEC_END.length;
+  return text.slice(0, start) + section + text.slice(stop);
+}
+
 const digest = (text) => crypto.createHash('sha256').update(normalize(text)).digest('hex').slice(0, 16);
 
 // "Depends on #12" lines in the marked section (Definition of Ready, item 6).
@@ -37,4 +52,4 @@ function closingIssues(body) {
   return [...out].sort((a, b) => a - b);
 }
 
-module.exports = { SPEC_START, SPEC_END, splitBody, digest, dependsOn, closingIssues };
+module.exports = { SPEC_START, SPEC_END, splitBody, withSpec, digest, dependsOn, closingIssues };

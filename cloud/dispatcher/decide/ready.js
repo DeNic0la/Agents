@@ -19,7 +19,9 @@ function checkReady(issue, settings) {
   if (!record.triage) fail(5, 'triage hasn\'t run on it (duplicates and `.out-of-scope/` unchecked)');
   const open = (issue.dependencies || []).filter((d) => d.state !== 'closed').map((d) => `#${d.number}`);
   if (open.length) fail(6, `it depends on open issues: ${open.join(', ')}`);
-  const estimate = record.triage && Number(record.triage.estimateUsd);
+  // The latest estimate: the spec's (phase 4) once there is one, else triage's.
+  const latest = record.estimateUsd ?? (record.triage ? record.triage.estimateUsd : undefined);
+  const estimate = latest == null ? NaN : Number(latest);
   const cap = route && settings.caps && settings.caps.perIssueUsd ? settings.caps.perIssueUsd[L.routeOf(route)] : undefined;
   if (!labels.has(L.BUDGET_EXTEND) && !(Number.isFinite(estimate) && Number.isFinite(cap) && estimate <= cap)) {
     fail(7, 'its cost estimate is missing or above the per-issue cap, and there is no `budget:extend`');

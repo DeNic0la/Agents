@@ -112,6 +112,13 @@ test('retries 429 honoring retry-after, then 5xx with backoff, and gives up afte
       assert.equal(calls.length, 2);
       assert.deepEqual(sleeps, [2000]);
     });
+  // Without a Retry-After header the client backs off; a missing header is not "wait 0".
+  await withClient((req, i) => (i === 0 ? [429, { error: { message: 'slow down' } }] : [200, { id: 'a' }]),
+    async (client, calls, sleeps) => {
+      await client.getAgent('a');
+      assert.equal(sleeps.length, 1);
+      assert.ok(sleeps[0] > 0, `slept ${sleeps[0]} ms`);
+    });
   await withClient(() => [503, { error: { message: 'down' } }], async (client, calls, sleeps) => {
     await assert.rejects(client.getAgent('a'), (e) => e.status === 503);
     assert.equal(calls.length, 4);

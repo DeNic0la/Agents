@@ -25,15 +25,6 @@ const realIo = {
   },
 };
 
-// A subset match: the platform may add fields to what we created.
-function covers(have, want) {
-  if (want && typeof want === 'object') {
-    if (!have || typeof have !== 'object') return false;
-    return Object.keys(want).every((k) => covers(have[k], want[k]));
-  }
-  return have === want;
-}
-
 async function ensureEnvironments(client, settings, log) {
   const existing = await client.listEnvironments();
   for (const [kind, want] of Object.entries(sync.desiredEnvironments(settings))) {
@@ -41,8 +32,8 @@ async function ensureEnvironments(client, settings, log) {
     if (!have) {
       await client.createEnvironment(want);
       log(`environment ${want.name} (${kind}): created`);
-    } else if (!covers(have, want)) {
-      log(`::warning::environment ${want.name} (${kind}) differs from the settings; left as it is`);
+    } else if (!sync.covers(have, want)) {
+      log(`::warning::environment ${want.name} (${kind}) differs from the settings; left as it is, and no session starts in it until it matches`);
     } else {
       log(`environment ${want.name} (${kind}): unchanged`);
     }

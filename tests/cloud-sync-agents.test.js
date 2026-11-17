@@ -223,6 +223,20 @@ test('CW-101: an environment that exists but differs is warned about and left al
   assert.equal(plat.state.environments[0].config.networking.type, 'unrestricted');
 });
 
+test('CW-91, CW-101: an environment with one allowed host more than the settings is drift, not unchanged', async () => {
+  const want = sync.desiredEnvironments(settings).repo;
+  const hosts = want.config.networking.allowed_hosts;
+  const withHosts = (list) => ({ id: 'env_x', name: want.name, config: { ...want.config, networking: { ...want.config.networking, allowed_hosts: list } } });
+  const extra = fakePlatform();
+  extra.state.environments.push(withHosts([...hosts, 'evil.example']));
+  const res = await run(extra, REPO, 'live');
+  assert.ok(res.lines.some((l) => l.startsWith('::warning::') && l.includes(want.name)), res.lines.join('\n'));
+  const same = fakePlatform();
+  same.state.environments.push(withHosts([...hosts]));
+  const ok = await run(same, REPO, 'live');
+  assert.ok(ok.lines.includes(`environment ${want.name} (repo): unchanged`), ok.lines.join('\n'));
+});
+
 test('CW-101: the client uploads a skill as multipart with files[] named by their paths', async () => {
   const seen = [];
   const fetchImpl = async (url, init) => {
