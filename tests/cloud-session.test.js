@@ -303,7 +303,7 @@ test('CW-102: a stale result applies nothing but the cost', () => {
   assert.deepEqual(plan.add, []);
   assert.deepEqual(plan.remove, []);
   assert.equal(plan.close, null);
-  assert.deepEqual(plan.record, { totalUsd: 1.5 });
+  assert.deepEqual(plan.record, { totalUsd: 1.5, sessionCostUsd: 0.5 });
   assert.match(said(plan), /result is not applied/);
   assert.equal(result.outcome, 'routed');
 });
@@ -762,7 +762,7 @@ test('CW-16, CW-102: a triage issue with a session record runs the session, the 
   assert.equal(platform.log.created.length, 1);
   assert.match(platform.log.created[0].initialMessage, /# Task: triage for issue #7/);
   assert.match(platform.log.created[0].initialMessage, /#3 closed: "Old"/);
-  assert.deepEqual(platform.log.created[0].metadata, { issue: '7', role: 'triage' });
+  assert.deepEqual(platform.log.created[0].metadata, { issue: '7', role: 'triage', request: 'now' });
   assert.equal(platform.log.created[0].budget.max_list_cost.amount, '85');
   const agentWrites = fg.writes.filter((w) => w.who === 'agent');
   assert.deepEqual(agentWrites.map((w) => [w.method, w.path, w.body]), [['POST', '/repos/o/r/issues/7/comments', { body: 'Routed direct.' }]]);

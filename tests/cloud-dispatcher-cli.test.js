@@ -37,6 +37,8 @@ function fakeGitHub(issues, timelines) {
       }
       if ((m = url.pathname.match(/^\/repos\/o\/r\/issues\/(\d+)\/timeline$/))) return send(200, timelines[m[1]] || []);
       if (url.pathname.endsWith('/dependencies/blocked_by')) return send(404, { message: 'Not Found' });
+      // The month ledger (CW-83): no session has cost anything yet.
+      if (url.pathname === '/repos/o/r/issues/comments' && url.searchParams.get('since')) return send(200, []);
       return send(404, { message: 'Not Found' });
     });
   });
@@ -72,6 +74,7 @@ test('cli, dry run: a new issue by a stranger gets one dry-run comment and no la
     };
     const first = await runCli(env);
     assert.equal(first.code, 0, first.stderr);
+    assert.match(first.stdout, /Month so far: \$0\.00 of \$\d+\.\d\d; running sessions may still spend \$0\.00\./);
     assert.equal(gh.writes.length, 1, JSON.stringify(gh.writes));
     const [w] = gh.writes;
     assert.equal(`${w.method} ${w.path}`, 'POST /repos/o/r/issues/5/comments');

@@ -174,7 +174,7 @@ async function runForIssue({ issue, role, settings, gh, agentClient, platform, m
       sections.push(pullSection(pull, mergeClassCheck(view.labels, pull, settings)));
     }
     const message = taskMessage({ role, view, record: facts.record, settings, limitUsd, issues, branch: mount, sections });
-    session = await runSession({ client: platform, role, environmentName, settings, limitUsd, message, branch: mount, mintToken: mint, metadata: { issue: String(issue), role }, now, sleep, log });
+    session = await runSession({ client: platform, role, environmentName, settings, limitUsd, message, branch: mount, mintToken: mint, metadata: { issue: String(issue), role, request: String(facts.record.session.at || '') }, now, sleep, log });
   } catch (err) {
     session = { id: null, link: null, phase: 'failed', text: '', error: err.message };
   }

@@ -3,6 +3,7 @@
 'use strict';
 
 const L = require('./labels');
+const { issueCap } = require('./spend');
 
 const routeLabel = (labels) => [...L.ROUTES].reverse().find((r) => labels.has(r)) || null;
 
@@ -22,7 +23,8 @@ function checkReady(issue, settings) {
   // The latest estimate: the spec's (phase 4) once there is one, else triage's.
   const latest = record.estimateUsd ?? (record.triage ? record.triage.estimateUsd : undefined);
   const estimate = latest == null ? NaN : Number(latest);
-  const cap = route && settings.caps && settings.caps.perIssueUsd ? settings.caps.perIssueUsd[L.routeOf(route)] : undefined;
+  // CW-82: an extension already used raises the cap the estimate is held to.
+  const cap = route ? issueCap(L.routeOf(route), record, settings) : NaN;
   if (!labels.has(L.BUDGET_EXTEND) && !(Number.isFinite(estimate) && Number.isFinite(cap) && estimate <= cap)) {
     fail(7, 'its cost estimate is missing or above the per-issue cap, and there is no `budget:extend`');
   }
@@ -41,7 +43,8 @@ const hasLabel = (issue, label) => (issue.labels instanceof Set ? issue.labels.h
 function startableQueue(readyIssues, activeCount, settings) {
   const free = Math.max(0, Number(settings.parallelImplementations || 0) - activeCount);
   return readyIssues
-    .filter((i) => checkReady(i, settings).ok && !hasLabel(i, L.PAUSED))
+    // CW-82: `budget:extend` lifts `paused` when the agent starts.
+    .filter((i) => checkReady(i, settings).ok && (!hasLabel(i, L.PAUSED) || hasLabel(i, L.BUDGET_EXTEND)))
     .map((i) => i.number)
     .sort((a, b) => a - b)
     .slice(0, free);
