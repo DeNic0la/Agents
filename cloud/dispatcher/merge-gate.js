@@ -1,23 +1,18 @@
-// Entry point of the merge-gate workflow: sets the `merge-gate` commit status on a head commit.
-// Reads GITHUB_EVENT_NAME, GITHUB_EVENT_PATH, GITHUB_TOKEN, GITHUB_REPOSITORY (and GITHUB_API_URL);
-// the owner comes from cloud/settings.json.
+// Entry point of the merge-gate workflow: sets the `merge-gate` and `owner-merge` commit
+// statuses on a head commit (D17, D50). Reads GITHUB_EVENT_NAME, GITHUB_EVENT_PATH,
+// GITHUB_TOKEN, GITHUB_REPOSITORY (and GITHUB_API_URL); the owner and the agent's login come
+// from cloud/settings.json.
 //
 // Events: `pull_request_target` (a pull request changed), `workflow_run` of review-relay (a
-// review changed; D50) and `workflow_dispatch` with a pull request number. Each is reduced to
-// a head commit, and every open pull request at that commit is judged.
+// review changed; D50) and `workflow_dispatch` with a pull request number (the dispatcher
+// after it recorded a merge check or a review). Each is reduced to a head commit, and every
+// open pull request at that commit is judged.
 'use strict';
 const fs = require('fs');
-const path = require('path');
 const { createClient } = require('./github/client.js');
-const { mergeGate, gateAtSha, pullsAtSha } = require('./decide/merge-gate.js');
-
-function readOwner() {
-  const file = path.join(__dirname, '..', 'settings.json');
-  if (!fs.existsSync(file)) throw new Error('cloud/settings.json is missing: it must define the "owner" login');
-  const owner = JSON.parse(fs.readFileSync(file, 'utf8')).owner;
-  if (!owner) throw new Error('cloud/settings.json has no "owner" field');
-  return owner;
-}
+const { loadSettings } = require('./cli.js');
+const { readRecord } = require('./decide/markers.js');
+const { judgePull, issueNumberOf, statusesAtSha, pullsAtSha } = require('./decide/merge-gate.js');
 
 // The head commit an event concerns, and the pull request it names, if any.
 function targetOf(name, event) {
@@ -32,19 +27,34 @@ function targetOf(name, event) {
   return { sha: null, number };
 }
 
-async function judge(client, repository, number, owner) {
+// The issue an agent pull request closes, with its dispatcher record. Only the dispatcher's
+// own comments count as record (markers.js), so nobody else can write a merge check.
+async function loadIssue(client, repository, number, settings) {
+  const data = await client.request('GET', `/repos/${repository}/issues/${number}`);
+  if (data.pull_request) return null;
+  const comments = await client.paginate(`/repos/${repository}/issues/${number}/comments`);
+  const timeline = comments.map((c) => ({ type: 'commented', actor: c.user && c.user.login, body: c.body }));
+  return {
+    number,
+    state: data.state,
+    labels: (data.labels || []).map((l) => (typeof l === 'string' ? l : l.name)),
+    record: readRecord(timeline, settings).record,
+  };
+}
+
+async function judge(client, repository, number, settings) {
   const prData = await client.request('GET', `/repos/${repository}/pulls/${number}`);
-  const reviewData = await client.paginate(`/repos/${repository}/pulls/${number}/reviews`);
-  const pr = { author: prData.user && prData.user.login, headSha: prData.head.sha, draft: Boolean(prData.draft) };
-  const reviews = reviewData.map((r) => ({ user: r.user && r.user.login, state: r.state, commitId: r.commit_id, submittedAt: r.submitted_at }));
-  return { number, headSha: pr.headSha, open: prData.state === 'open', result: mergeGate({ pr, reviews, owner }) };
+  const pr = { author: prData.user && prData.user.login, headSha: prData.head.sha, body: prData.body || '' };
+  const issueNumber = issueNumberOf(pr);
+  const issue = issueNumber ? await loadIssue(client, repository, issueNumber, settings) : null;
+  return { number, headSha: pr.headSha, open: prData.state === 'open', statuses: judgePull({ pr, issue, settings }) };
 }
 
 async function main() {
   const env = process.env;
   const { GITHUB_TOKEN: token, GITHUB_REPOSITORY: repository, GITHUB_API_URL: apiUrl, GITHUB_EVENT_PATH: eventPath } = env;
   if (!token || !repository || !eventPath) throw new Error('GITHUB_TOKEN, GITHUB_REPOSITORY and GITHUB_EVENT_PATH are required');
-  const owner = readOwner();
+  const settings = loadSettings();
   const client = createClient({ token, repository, ...(apiUrl ? { apiUrl } : {}) });
   const target = targetOf(env.GITHUB_EVENT_NAME, JSON.parse(fs.readFileSync(eventPath, 'utf8')));
 
@@ -54,14 +64,16 @@ async function main() {
   const numbers = new Set(pullsAtSha(await client.paginate(`/repos/${repository}/commits/${sha}/pulls`), sha).map((p) => p.number));
   if (target.number) numbers.add(target.number);
 
-  const gates = [];
+  const judged = [];
   for (const n of [...numbers].sort((a, b) => a - b)) {
-    const g = await judge(client, repository, n, owner);
-    if (g.open && g.headSha === sha) gates.push(g); // a pull request that moved on gets its own run
+    const j = await judge(client, repository, n, settings);
+    if (j.open && j.headSha === sha) judged.push(j); // a pull request that moved on gets its own run
   }
-  const { state, description } = gateAtSha(gates);
-  await client.request('POST', `/repos/${repository}/statuses/${sha}`, { state, description, context: 'merge-gate' });
-  console.log(`${sha} (${gates.map((g) => `#${g.number}`).join(', ') || 'no open pull request'}): merge-gate ${state} - ${description}`);
+  const where = judged.map((j) => `#${j.number}`).join(', ') || 'no open pull request';
+  for (const { context, state, description } of statusesAtSha(judged)) {
+    await client.request('POST', `/repos/${repository}/statuses/${sha}`, { state, description, context });
+    console.log(`${sha} (${where}): ${context} ${state} - ${description}`);
+  }
 }
 
 if (require.main === module) {

@@ -1,86 +1,106 @@
-// Tests for cloud/dispatcher/decide/merge-gate.js.
+// Tests for cloud/dispatcher/decide/merge-gate.js and the merge-gate entry point.
 // Run: node --test "tests/*.test.js"
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
 const path = require('path');
 
-const { mergeGate } = require(path.join(__dirname, '..', 'cloud/dispatcher/decide/merge-gate.js'));
+const { judgePull, issueNumberOf, classOf, gateAtSha, statusesAtSha, pullsAtSha } =
+  require(path.join(__dirname, '..', 'cloud/dispatcher/decide/merge-gate.js'));
 
-const owner = 'owner';
-const pr = { author: 'someone', headSha: 'sha2', draft: false };
-const review = (user, state, commitId, submittedAt) => ({ user, state, commitId, submittedAt });
-const gate = (reviews, over = {}) => mergeGate({ pr: { ...pr, ...over }, reviews, owner });
+const settings = { owner: 'owner', agentLogin: 'agents[bot]', dispatcherLogin: 'github-actions[bot]' };
+const agentPr = (over = {}) => ({ author: 'agents[bot]', headSha: 'sha2', body: 'Implements the spec.\n\nCloses #7', ...over });
+const issue = (labels, record = {}, over = {}) => ({ number: 7, state: 'open', labels: ['in-review', ...labels], record, ...over });
+const judge = (pr, iss) => judgePull({ pr, issue: iss, settings });
+const states = (r) => [r['merge-gate'].state, r['owner-merge'].state];
 
-test('a pull request opened by the owner passes', () => {
-  const r = gate([], { author: owner });
-  assert.deepEqual(r, { state: 'success', description: 'Opened by the owner' });
+// ---- D17: merge-gate for the agent's rule, owner-merge for everything else -----------
+
+test('D17, CW-65: the owner\'s own pull request is the owner\'s to merge; authorship passes neither gate', () => {
+  const r = judge(agentPr({ author: 'owner' }), issue(['merge:self'], { mergeCheck: { sha: 'sha2', merge: 'merge:self' } }));
+  assert.deepEqual(states(r), ['success', 'pending']);
+  assert.match(r['owner-merge'].description, /only the owner merges it/);
 });
 
-test('no reviews: pending', () => {
-  const r = gate([]);
-  assert.equal(r.state, 'pending');
-  assert.equal(r.description, "Waiting for the owner's approval");
+test('D17: a pull request by anyone else is the owner\'s to merge', () => {
+  assert.deepEqual(states(judge(agentPr({ author: 'someone' }), issue(['merge:agent']))), ['success', 'pending']);
 });
 
-test('owner approval of the head commit passes', () => {
-  const r = gate([review(owner, 'APPROVED', 'sha2', '2026-01-01T10:00:00Z')]);
-  assert.deepEqual(r, { state: 'success', description: 'Approved by the owner' });
+test('D17, CW-65: an agent pull request for a merge:human issue is the owner\'s to merge', () => {
+  const r = judge(agentPr(), issue(['merge:human']));
+  assert.deepEqual(states(r), ['success', 'pending']);
+  assert.match(r['owner-merge'].description, /#7 is merge:human/);
 });
 
-test('an approval on an older commit does not count', () => {
-  assert.equal(gate([review(owner, 'APPROVED', 'sha1', '2026-01-01T10:00:00Z')]).state, 'pending');
+test('D17: an agent pull request without one open issue with a merge class is the owner\'s to merge', () => {
+  assert.deepEqual(states(judge(agentPr(), null)), ['success', 'pending']);
+  assert.deepEqual(states(judge(agentPr(), issue([]))), ['success', 'pending']);
+  assert.deepEqual(states(judge(agentPr(), issue(['merge:agent'], {}, { state: 'closed' }))), ['success', 'pending']);
 });
 
-test('a later CHANGES_REQUESTED after APPROVED blocks', () => {
-  const r = gate([
-    review(owner, 'APPROVED', 'sha2', '2026-01-01T10:00:00Z'),
-    review(owner, 'CHANGES_REQUESTED', 'sha2', '2026-01-01T11:00:00Z'),
-  ]);
-  assert.equal(r.state, 'pending');
+test('CW-67: with several merge class labels the highest counts', () => {
+  assert.equal(classOf(['merge:self', 'merge:human']), 'merge:human');
+  assert.equal(classOf(['merge:agent', 'merge:self']), 'merge:agent');
+  assert.equal(classOf(['ready']), null);
+  assert.deepEqual(states(judge(agentPr(), issue(['merge:agent', 'merge:human']))), ['success', 'pending']);
 });
 
-test('an approval after CHANGES_REQUESTED passes, whatever the input order', () => {
-  const r = gate([
-    review(owner, 'APPROVED', 'sha2', '2026-01-01T11:00:00Z'),
-    review(owner, 'CHANGES_REQUESTED', 'sha2', '2026-01-01T10:00:00Z'),
-  ]);
-  assert.equal(r.state, 'success');
+test('CW-50: an agent pull request is for the one issue it closes', () => {
+  assert.equal(issueNumberOf({ body: 'Closes #7' }), 7);
+  assert.equal(issueNumberOf({ body: 'Closes #7, fixes #8' }), null);
+  assert.equal(issueNumberOf({ body: 'See #7' }), null);
 });
 
-test('a COMMENTED review after APPROVED keeps the approval', () => {
-  const r = gate([
-    review(owner, 'APPROVED', 'sha2', '2026-01-01T10:00:00Z'),
-    review(owner, 'COMMENTED', 'sha2', '2026-01-01T11:00:00Z'),
-  ]);
-  assert.equal(r.state, 'success');
+test('CW-63: merge:self passes only with the dispatcher\'s check at the head commit', () => {
+  const at = (mergeCheck) => judge(agentPr(), issue(['merge:self'], { mergeCheck }));
+  assert.deepEqual(states(at({ sha: 'sha2', merge: 'merge:self' })), ['success', 'success']);
+  assert.deepEqual(states(at({ sha: 'sha1', merge: 'merge:self' })), ['pending', 'success']);
+  assert.deepEqual(states(at({ sha: 'sha2', merge: 'merge:agent' })), ['pending', 'success']);
+  assert.deepEqual(states(at(undefined)), ['pending', 'success']);
 });
 
-test('a dismissed approval is the latest decisive review and does not count', () => {
-  const r = gate([
-    review(owner, 'APPROVED', 'sha2', '2026-01-01T10:00:00Z'),
-    review(owner, 'DISMISSED', 'sha2', '2026-01-01T11:00:00Z'),
-  ]);
-  assert.equal(r.state, 'pending');
+test('CW-64, D18: merge:agent passes only with the review agent\'s approval of the head commit', () => {
+  const at = (review) => judge(agentPr(), issue(['merge:agent'], { review }));
+  assert.deepEqual(states(at({ sha: 'sha2', verdict: 'approved' })), ['success', 'success']);
+  assert.deepEqual(states(at({ sha: 'sha1', verdict: 'approved' })), ['pending', 'success']);
+  assert.deepEqual(states(at({ sha: 'sha2', verdict: 'changes' })), ['pending', 'success']);
+  // A merge check is no approval.
+  assert.deepEqual(states(judge(agentPr(), issue(['merge:agent'], { mergeCheck: { sha: 'sha2', merge: 'merge:self' } }))), ['pending', 'success']);
 });
 
-test('reviews by others never count', () => {
-  const r = gate([review('agent-bot', 'APPROVED', 'sha2', '2026-01-01T10:00:00Z')]);
-  assert.equal(r.state, 'pending');
+test('the descriptions stay within 140 characters', () => {
+  const long = agentPr({ author: 'x'.repeat(200) });
+  for (const r of [judge(long, null), judge(agentPr(), issue(['merge:self'])), judge(agentPr(), issue(['merge:agent']))]) {
+    for (const s of Object.values(r)) assert.ok(s.description.length <= 140);
+  }
 });
 
-test('the description stays within 140 characters', () => {
-  for (const r of [gate([]), gate([], { author: owner })]) assert.ok(r.description.length <= 140);
+test('D17, D50: both statuses are set for a commit, each from every pull request at it', () => {
+  const owners = { number: 3, statuses: judge(agentPr({ author: 'owner' }), null) };
+  const agents = { number: 5, statuses: judge(agentPr(), issue(['merge:agent'], { review: { sha: 'sha2', verdict: 'approved' } })) };
+  assert.deepEqual(statusesAtSha([agents]).map((s) => [s.context, s.state]), [['merge-gate', 'success'], ['owner-merge', 'success']]);
+  const both = statusesAtSha([owners, agents]);
+  assert.deepEqual(both.map((s) => [s.context, s.state]), [['merge-gate', 'success'], ['owner-merge', 'pending']]);
+  assert.match(both[1].description, /^#3: /);
+});
+
+test('D17: the owner-merge ruleset requires owner-merge and lets only the repository admin bypass it', () => {
+  const rs = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'cloud/ruleset-owner-merge.json'), 'utf8'));
+  assert.deepEqual(rs.conditions.ref_name.include, ['~DEFAULT_BRANCH']);
+  assert.deepEqual(rs.bypass_actors, [{ actor_id: 5, actor_type: 'RepositoryRole', bypass_mode: 'always' }]);
+  const checks = rs.rules.find((r) => r.type === 'required_status_checks').parameters.required_status_checks;
+  assert.deepEqual(checks, [{ context: 'owner-merge', integration_id: 15368 }]);
+  const main = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'cloud/ruleset-main.json'), 'utf8'));
+  assert.deepEqual(main.bypass_actors, []);
 });
 
 // ---- D50: one status per commit, judged from the default branch ---------------------
 
-const { gateAtSha, pullsAtSha } = require(path.join(__dirname, '..', 'cloud/dispatcher/decide/merge-gate.js'));
 const { targetOf } = require(path.join(__dirname, '..', 'cloud/dispatcher/merge-gate.js'));
-const fs = require('fs');
 
-const ok = { state: 'success', description: 'Approved by the owner' };
-const waiting = { state: 'pending', description: "Waiting for the owner's approval" };
+const ok = { state: 'success', description: 'The review agent approved this commit' };
+const waiting = { state: 'pending', description: "Waiting for the review agent's approval of this commit" };
 
 test('D50: a commit shared by two pull requests passes only when both pass', () => {
   assert.equal(gateAtSha([{ number: 3, result: ok }, { number: 5, result: ok }]).state, 'success');
