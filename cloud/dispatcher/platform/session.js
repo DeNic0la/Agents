@@ -5,6 +5,7 @@
 'use strict';
 
 const { usdToBudget, costUsd, sessionPhase } = require('./client');
+const { desiredEnvironments, covers } = require('./sync');
 
 // Unconfirmed names of the beta, kept in one place.
 const AGENT_MESSAGE_EVENT = 'agent.message';
@@ -43,12 +44,17 @@ function sessionBudget(limitUsd, settings) {
   return { type: 'limit', max_list_cost: { amount: usdToBudget(usd), currency: 'USD' } };
 }
 
-async function findSetup(client, role, environmentName) {
+async function findSetup(client, role, environmentName, settings) {
   const [agents, environments] = await Promise.all([client.listAgents(), client.listEnvironments()]);
   const agent = agents.find((a) => a.name === agentName(role) && !a.archived_at);
   if (!agent) throw new SetupError(`the agent ${agentName(role)} doesn't exist yet: run the sync-agents workflow`);
   const env = environments.find((e) => e.name === environmentName && !e.archived_at);
   if (!env) throw new SetupError(`the environment ${environmentName} doesn't exist yet: run the sync-agents workflow`);
+  // The session gets a token that can push, so its network access must be what the settings say.
+  const want = Object.values(desiredEnvironments(settings)).find((w) => w.name === environmentName);
+  if (!want || !covers(env, want)) {
+    throw new SetupError(`the environment ${environmentName} differs from cloud/settings.json in its network access: fix it in the Claude Console, or delete it and run the sync-agents workflow`);
+  }
   return { agent, env };
 }
 
@@ -65,7 +71,7 @@ async function runSession({
   client, role, environmentName, settings, limitUsd, message, branch = 'main', metadata,
   mintToken, now = Date.now, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), log = () => {},
 }) {
-  const { agent, env } = await findSetup(client, role, environmentName);
+  const { agent, env } = await findSetup(client, role, environmentName, settings);
   const budget = sessionBudget(limitUsd, settings);
   const repo = repoName(settings.repository);
   const resources = [{

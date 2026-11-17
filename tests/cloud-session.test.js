@@ -14,6 +14,7 @@ const { taskMessage, fence } = req('decide/task.js');
 const { parseResult, validateResult, agentActions, dispatcherOutcome, scrubSecrets } = req('decide/outcome.js');
 const { formatRecord, parseRecord } = req('decide/markers.js');
 const { runSession, lastAgentText, sessionBudget, SetupError } = req('platform/session.js');
+const { desiredEnvironments } = req('platform/sync.js');
 const { parseRunName, runName, activeSessionIssues, dispatchWorkflow } = req('github/actions.js');
 const { runForIssue, skipReason, liveEnvProblems } = req('session-cli.js');
 const { loadSettings, liveSetupMissing, runningSessions } = req('cli.js');
@@ -450,7 +451,7 @@ function fakePlatform(over = {}) {
     log,
     clock,
     listAgents: async () => over.agents || [{ id: 'agent_1', name: 'agents-triage' }, { id: 'agent_old', name: 'agents-triage', archived_at: 'x' }],
-    listEnvironments: async () => over.environments || [{ id: 'env_1', name: 'agents-repo' }],
+    listEnvironments: async () => over.environments || [{ id: 'env_1', ...desiredEnvironments(settings).repo }],
     createSession: async (args) => { log.created.push(args); return { id: 'sesn_1', status: 'running' }; },
     getSession: async () => { log.gets += 1; return over.session(log.gets, clock.t - 1700000000000, log); },
     listEvents: async () => over.events || [
@@ -551,6 +552,19 @@ test('CW-16: a missing agent or environment throws SetupError', async () => {
   await assert.rejects(run(fakePlatform({ agents: [], session: () => idle() })), (e) => e instanceof SetupError && /agents-triage/.test(e.message));
   await assert.rejects(run(fakePlatform({ agents: [{ id: 'a', name: 'agents-triage', archived_at: 'x' }], session: () => idle() })), SetupError);
   await assert.rejects(run(fakePlatform({ environments: [], session: () => idle() })), (e) => e instanceof SetupError && /agents-repo/.test(e.message));
+});
+
+test('CW-93: no session starts in an environment whose network access differs from the settings', async () => {
+  const repo = desiredEnvironments(settings).repo;
+  const open = { ...repo, config: { ...repo.config, networking: { type: 'unrestricted' } } };
+  const created = [];
+  const platform = (env) => fakePlatform({ environments: [{ id: 'env_1', ...env }], session: () => idle() });
+  for (const env of [open, { name: repo.name }, { ...repo, config: { ...repo.config, networking: { ...repo.config.networking, allowed_hosts: [...repo.config.networking.allowed_hosts, 'evil.example'] } } }]) {
+    const p = platform(env);
+    await assert.rejects(run(p), (e) => e instanceof SetupError && /network access/.test(e.message));
+    created.push(...p.log.created);
+  }
+  assert.equal(created.length, 0);
 });
 
 test('CW-16: idle without a stop_reason right after creation keeps polling', async () => {
@@ -674,7 +688,7 @@ function jobDeps(fg, text, over = {}) {
   const events = [{ type: 'agent.message', content: [{ type: 'text', text }] }];
   const platform = fakePlatform({
     agents: [{ id: 'a1', name: `agents-${over.role || 'triage'}` }],
-    environments: [{ id: 'e1', name: settings.platform.repoEnvironment }, { id: 'e2', name: settings.platform.webEnvironment }],
+    environments: [{ id: 'e1', ...desiredEnvironments(settings).repo }, { id: 'e2', ...desiredEnvironments(settings).web }],
     session: () => ({ ...idle(80) }),
     events,
   });
