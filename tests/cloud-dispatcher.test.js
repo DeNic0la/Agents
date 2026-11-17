@@ -638,9 +638,9 @@ test('snapshot: a pull request in another repository that mentions the issue is 
   assert.deepEqual(referencingPulls([xref(3, 'o/r'), xref(7, 'someone/fork'), xref(8, 'O/R')], 'o/r'), [8, 3]);
 });
 
-test('snapshot: an issue maps to its number, author, labels and kind', () => {
-  assert.deepEqual(mapIssue({ number: 2, state: 'open', user: { login: OWNER }, body: null, labels: [{ name: 'triage' }, 'paused'], pull_request: { url: 'x' } }), {
-    number: 2, state: 'open', stateReason: null, author: OWNER, body: '', labels: ['triage', 'paused'], isPull: true, updatedAt: null,
+test('snapshot: an issue maps to its number, title, author, labels and kind', () => {
+  assert.deepEqual(mapIssue({ number: 2, title: 'Fix it', state: 'open', user: { login: OWNER }, body: null, labels: [{ name: 'triage' }, 'paused'], pull_request: { url: 'x' } }), {
+    number: 2, title: 'Fix it', state: 'open', stateReason: null, author: OWNER, body: '', labels: ['triage', 'paused'], isPull: true, updatedAt: null,
   });
 });
 
@@ -710,4 +710,35 @@ test('D51: claude[bot] neither answers for the owner nor approves', () => {
   const p = decide(view({ body: withSpec(), labels: [...approval, 'approved'], timeline: [...approval.map((l) => ev.label(l, BOT)), ev.record({ ...TRIAGED, state: 'needs-approval' }), ev.label('approved', CLAUDE)] }));
   assert.deepEqual(p.remove, ['approved']);
   assert.equal(p.start, null);
+});
+
+// ---- Phase 3: labels the agent invents, lost session runs ------------------------------
+
+test('D26: a label outside cloud/labels.json that the agent identity added comes off, with a comment', () => {
+  const labels = ['origin:owner', 'triage'];
+  const base = [...labels.map((l) => ev.label(l, BOT)), ev.record({ intake: true, ask: digest(ASK), state: 'triage' })];
+  const p = decide(view({ labels: [...labels, 'wontfix', 'bug'], timeline: [...base, ev.label('wontfix', AGENT), ev.label('bug', OWNER)] }), { running: new Set([1]) });
+  assert.deepEqual(p.remove, ['wontfix']);
+  assert.match(p.say.join('\n'), /Removed `wontfix`: the agent identity added it.*D26/);
+});
+
+test('CW-16, D54: a session the dispatcher requested whose run is gone counts as a failure, once', () => {
+  const labels = ['origin:owner', 'triage'];
+  const lost = { role: 'triage', limitUsd: 1, at: '2026-11-17T10:00:00Z' };
+  const timeline = (record) => [...labels.map((l) => ev.label(l, BOT)), ev.record({ intake: true, ask: digest(ASK), state: 'triage', ...record })];
+  const first = decide(view({ labels, timeline: timeline({ session: lost }) }));
+  assert.deepEqual(first.start, { role: 'triage', limitUsd: 1 });
+  assert.equal(first.record.failures, 1);
+  assert.equal(first.record.session, null);
+  assert.match(first.say.join('\n'), /The triage session run ended without a result\. Retrying once\./);
+
+  const second = decide(view({ labels, timeline: timeline({ session: lost, failures: 1 }) }));
+  assert.equal(second.start, null);
+  assert.equal(second.state, 'needs-answer');
+  assert.equal(second.record.failures, null);
+  assert.deepEqual(second.record.waiting.from, 'triage');
+
+  const running = decide(view({ labels, timeline: timeline({ session: lost }) }), { running: new Set([1]) });
+  assert.equal(running.start, null);
+  assert.equal(running.record.failures, undefined);
 });

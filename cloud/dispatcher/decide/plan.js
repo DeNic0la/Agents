@@ -15,6 +15,7 @@ class Plan {
     this.notes = []; // why nothing started; shown in dry runs only
     this.record = {}; // hidden marker data; null deletes a key
     this.start = null; // { role, limitUsd }
+    this.close = null; // 'completed' or 'not_planned'
   }
 
   has(label) {
@@ -52,12 +53,13 @@ class Plan {
   }
 
   get isEmpty() {
-    return !this.add.length && !this.remove.length && !this.say.length && !this.start && !Object.keys(this.record).length;
+    return !this.add.length && !this.remove.length && !this.say.length && !this.start && !this.close && !Object.keys(this.record).length;
   }
 
   // What a dry run reports: everything but the record, which only a live run writes.
   get visible() {
-    return { add: this.add, remove: this.remove, say: this.say, start: this.start, notes: this.notes };
+    // `close` only when set, so earlier dry-run hashes stay valid.
+    return { add: this.add, remove: this.remove, say: this.say, start: this.start, notes: this.notes, ...(this.close ? { close: this.close } : {}) };
   }
 }
 

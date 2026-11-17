@@ -1,6 +1,8 @@
 // Entry point of the dispatch workflow: reads the event, loads the issues it concerns,
 // decides and applies. Reads GITHUB_EVENT_NAME, GITHUB_EVENT_PATH, GITHUB_TOKEN,
 // GITHUB_REPOSITORY, optional GITHUB_API_URL and CLOUD_STOPPED (repository variable).
+// In live mode it also starts each session as a run of the session workflow; the job
+// passes whether the secrets that workflow needs exist (HAS_* = 'true').
 'use strict';
 
 const fs = require('fs');
@@ -8,7 +10,8 @@ const path = require('path');
 const { createClient } = require('./github/client');
 const { loadIssueView, listOpenIssues, listClosedSince } = require('./github/snapshot');
 const { applyPlan, dryRunComment } = require('./github/apply');
-const { decideAll } = require('./decide');
+const { decideAll, readFacts } = require('./decide');
+const { activeSessionIssues, dispatchWorkflow, SESSION_WORKFLOW } = require('./github/actions');
 const { closingIssues } = require('./decide/spec');
 const L = require('./decide/labels');
 const { settingsProblems } = require('./decide/settings');
@@ -57,6 +60,28 @@ function reconcileTargets({ focus, open, closed = [], now = Date.now(), recentMi
   return { numbers: [...numbers].sort((a, b) => a - b), activeElsewhere };
 }
 
+// Owner steps 4 and 5: what the session workflow needs before live mode may start one.
+function liveSetupMissing(env) {
+  const missing = [];
+  if (env.HAS_ANTHROPIC_API_KEY !== 'true') missing.push('the secret ANTHROPIC_API_KEY');
+  if (!env.AGENT_APP_ID) missing.push('the variable AGENT_APP_ID');
+  if (env.HAS_AGENT_APP_PRIVATE_KEY !== 'true') missing.push('the secret AGENT_APP_PRIVATE_KEY');
+  return missing;
+}
+
+// An issue has a session running when the dispatcher requested one (its `session`
+// record) and a session run for it is queued or running, or was requested so recently
+// that GitHub may not list the run yet. A run that ended without clearing the record has
+// crashed: the rules count a failure and start the agent again (CW-16).
+const START_GRACE_MINUTES = 10;
+function runningSessions(views, activeIssues, settings, now = Date.now()) {
+  return new Set(views.filter((v) => {
+    const session = readFacts(v, settings).record.session;
+    if (!session) return false;
+    return activeIssues.has(v.number) || now - Date.parse(session.at || 0) < START_GRACE_MINUTES * 60000;
+  }).map((v) => v.number));
+}
+
 function loadSettings(file = SETTINGS) {
   if (!fs.existsSync(file)) throw new Error('cloud/settings.json is missing');
   const settings = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -71,7 +96,9 @@ async function main() {
     throw new Error('GITHUB_TOKEN, GITHUB_REPOSITORY and GITHUB_EVENT_PATH are required');
   }
   const settings = loadSettings();
-  if (settings.mode === 'live') throw new Error('live mode needs the platform client, which phase 3 adds; set "mode": "dry-run"');
+  const live = settings.mode === 'live';
+  const missing = live ? liveSetupMissing(env) : [];
+  if (missing.length) throw new Error(`live mode needs ${missing.join(', ')} (build plan, owner steps 4 and 5); keep "mode": "dry-run" until then`);
 
   const event = JSON.parse(fs.readFileSync(env.GITHUB_EVENT_PATH, 'utf8'));
   const focus = focusIssues(env.GITHUB_EVENT_NAME, event);
@@ -84,10 +111,13 @@ async function main() {
 
   const views = [];
   for (const n of numbers) views.push(await loadIssueView(client, n));
-  const ctx = { settings, control: { stopped: env.CLOUD_STOPPED === 'true' }, running: new Set(), activeElsewhere };
+  const running = live ? runningSessions(views, await activeSessionIssues(client), settings) : new Set();
+  const ctx = { settings, control: { stopped: env.CLOUD_STOPPED === 'true' }, running, activeElsewhere };
 
   for (const plan of decideAll(views, ctx)) {
+    if (live && plan.start) plan.remember({ session: { role: plan.start.role, limitUsd: plan.start.limitUsd, at: new Date().toISOString() } });
     await applyPlan(client, plan, settings.mode);
+    if (live && plan.start) await dispatchWorkflow(client, SESSION_WORKFLOW, env.DEFAULT_BRANCH || 'main', { issue: plan.number, role: plan.start.role });
     const summary = dryRunComment(plan);
     console.log(`#${plan.number}: ${summary ? summary.split('\n').filter((l) => l.startsWith('- ')).join(' ') : 'nothing to do'}`);
   }
@@ -101,4 +131,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { focusIssues, reconcileTargets, loadSettings };
+module.exports = { focusIssues, reconcileTargets, loadSettings, liveSetupMissing, runningSessions };

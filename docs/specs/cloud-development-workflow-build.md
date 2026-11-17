@@ -25,6 +25,7 @@ Public means Actions minutes are free, but strangers can open issues that each c
 
 - Answer: public, stays public. Issues from strangers are ignored until the owner tells the agents what to do with them.
 - Confirmed: an `origin:external` issue gets `needs-answer` and one dispatcher comment, and no session starts. When the owner comments, it's triaged as the workflow document says (CW-19, scenario 13).
+- Owner's answer of 2026-11-17: make it public; the owner changes the visibility (D63).
 - Found while building: the repository is **private** today (an anonymous `GET /repos/DeNic0la/Agents` returns 404). Until it's public, or the account has GitHub Pro, the ruleset on `main` isn't enforced (Phase 0, Q5), strangers can't open issues, and every Actions minute counts against the 2,000, a Windows minute as two. Making it public is the owner's act; the build doesn't change visibility.
 
 ### D3. Dispatcher runtime
@@ -105,7 +106,7 @@ A review of the workflow document and the spec before phase 0 found contradictio
 | D36 | CW-22 by repair | `route:direct` on an issue that isn't `origin:owner` becomes `route:lean`. | yes |
 | D37 | An external issue edited while it waits | Not re-triaged while it waits; the owner's comment triages the text as it is then. | yes |
 | D38 | Issues the dispatcher opens (the status issue, phase 9) | The rules leave them alone. | yes |
-| D39 | Dry run | A dry run writes neither labels nor records. It posts one comment per distinct plan, deduplicated by a hash marker, and posts nothing when there is nothing to do. Live mode is refused until phase 3 adds the platform client. | yes |
+| D39 | Dry run | A dry run writes neither labels nor records. It posts one comment per distinct plan, deduplicated by a hash marker, and posts nothing when there is nothing to do. Live mode is refused until phase 3 adds the platform client; since phase 3 it needs owner steps 4 and 5 (step 8). | yes |
 | D40 | Definition of Ready failures | Commented once per distinct set of failing items, not on every event. | yes |
 | D41 | Which issue a pull request belongs to | The issue its body closes ("Closes #N" and GitHub's synonyms). | yes |
 | D42 | No scheduled reconcile in phase 2 | A reconcile of all open issues is started by hand (`dispatch`, Run workflow, empty issue). A schedule comes with phase 3, when a lost session matters. | yes |
@@ -119,6 +120,17 @@ A review of the workflow document and the spec before phase 0 found contradictio
 | D50 | `merge-gate` on reviews | A `pull_request_review` run uses the pull request's own copy of the workflow, so a pull request could change its gate. `review-relay` runs on reviews with no permissions and no code; `merge-gate` runs on its `workflow_run` and on `pull_request_target`, both from the default branch. The status belongs to a commit: it's green only when every open pull request at that commit passes. Reviews reach the gate only once both files are on `main`. | best guess |
 | D51 | The Claude GitHub App (`claude[bot]`, `anthropics/claude-code-action`), which the owner installed | It's the owner's interactive assistant: it answers the owner's `@claude` mentions and reviews the owner's pull requests, billed to the owner's subscription. It isn't the agent identity (step 5) and doesn't run the cloud sessions, which keep the workspace key and its cap (D1, D4). The rules treat it like any other actor: its comments end no wait and its label changes are reverted. It holds Contents write while `main` is unprotected, against D43's order, so its workflows run only for the owner. | best guess |
 | D52 | Who writes to GitHub for a session | The session gets the App installation token only as its `github_repository` resource, for git: it clones and pushes to `cloud/issue-<N>`. It gets no GitHub tool. Its comments, the issues it files, the marked section, the pull request and the merge are made by the dispatcher job with an installation token of the agent identity, from the session's `agent-result` block (`cloud/agents/README.md`). So the agent identity is still their author (CW-13), and every action is checked in one place: the outcomes a role may report, at most 3 filed issues (CW-7), the merge class it may raise but not lower (CW-67). The token would also work against `api.github.com`, which is an allowed host (CW-93): the dispatcher's reverts (D31, D46) and the merge gate are the enforcement, not the token's absence. | best guess |
+| D53 | How a session runs next to GitHub | Each session is a run of `session` (`.github/workflows/session.yml`), which the dispatcher starts with `workflow_dispatch`, the one event its token may trigger. The run is named `session #<issue> <role>`, starts the platform session, watches it until it ends or `platform.sessionTimeoutMinutes` passes (then interrupts it), applies the result and starts a `dispatch` run for the issue. The job's limit of 345 minutes stays under the Actions limit of 6 hours. Rejected: waiting in the `dispatch` job, which would hold the one concurrency group (D49) for hours; a platform webhook, which the docs don't offer. | best guess |
+| D54 | Is a session running? | When the issue's `session` record is set and a `session` run for it is queued or running, or was requested less than 10 minutes ago (GitHub may not list it yet). A record with no run means the run ended without reporting: CW-16 counts it as a failure, so the agent starts once more, then the issue goes to `needs-answer`. | best guess |
+| D55 | Where a session's hard limit comes from | From the dispatcher's `session` record on the issue, written when it starts the run, never from the run's inputs: a run started by hand can't raise it. A run whose issue no longer calls for its role (closed, another state, no record), or that finds `CLOUD_STOPPED` on, ends without starting anything and clears a `session` record of its role, so D54 doesn't count it as lost. | best guess |
+| D56 | The one-request overshoot (Phase 0, Q3) | The limit passed to the platform is the hard limit less `platform.requestMarginUsd` in `cloud/settings.json`, $0.15 to start. | best guess |
+| D57 | What triage cost counts against | The month and the issue's total, shown in the cost line. Not the issue's cap: triage has its own per-run cap, and the issue's cap pays for refining, implementing and reviewing. | best guess |
+| D58 | CW-91 for a session's output | Before anything reaches GitHub, the job replaces with `[redacted]` every token it minted and anything shaped like a GitHub token, a Claude key or a private key, in the agent's text and in error messages. | best guess |
+| D59 | How triage closes an issue | `duplicate` closes it as not planned and says "Duplicate of #N". `split` opens the 2 to 5 issues as the agent identity, then closes it as completed and links them; if any could not be opened, the issue goes to `needs-answer` instead. An outcome whose phase isn't built yet goes to `needs-answer` saying the dispatcher can't act on it yet. | best guess |
+| D60 | `sync-agents` before the key exists | In `dry-run` mode it prints a notice and succeeds, so merging phase 3 before step 4 leaves no red run; in `live` mode it fails. | best guess |
+| D61 | A session that doesn't start | A missing agent or environment, or a platform error before the session exists, is a failed session (CW-16): the comment says it didn't start and why, and it counts toward the one retry. | best guess |
+| D62 | D42's schedule | `dispatch` also runs every hour and reconciles all open issues, so a lost session (D54) is found within an hour. While the repository is private that's about 720 Actions minutes a month; public repositories don't pay for minutes. | best guess |
+| D63 | Owner's answers of 2026-11-17 | Sessions run on Managed Agents with the workspace key (D1, D4), not on the owner's subscription or `claude-code-action`. The repository is to become public, and the owner changes the visibility (D2). | yes |
 
 ## Design
 
@@ -168,7 +180,14 @@ Each phase ends with something that can be checked on a test issue. Every change
 | 0 | Answered (next section). The owner's steps are open. | The steps in [What the owner does by hand](#what-the-owner-does-by-hand) are done; Settings, Secrets and variables, Actions lists `ANTHROPIC_API_KEY`, `AGENT_APP_PRIVATE_KEY` and the variable `AGENT_APP_ID`. |
 | 1 | Built, not merged. | Locally: `node --test "tests/*.test.js"`. After the merge: the `ci` check runs on a pull request with a Linux job and two Windows jobs; Actions, `labels`, Run workflow creates the labels (a second run changes nothing); the ruleset is applied and a pull request can't merge before `ci` and `merge-gate` are green. |
 | 2 | Built, not merged; review fixes D44 to D50 applied. | Locally: `node --test "tests/*.test.js"` (the test names carry the CW and D numbers). After the merge, approving a pull request starts `review-relay` and then `merge-gate`. After the merge: open a test issue; within a minute the `dispatch` run comments "Dry run. The dispatcher would: add `origin:owner`, `triage` … start the triage agent with a hard limit of $1.00"; comment on it, and no second identical comment appears. |
-| 3 to 10 | Not started. | |
+| 3 | Built, not merged, not run live. Also D26 (labels the agent invents are removed) and D53 to D62. CW-103's report on the status issue comes with phase 9, CW-85's monthly total with phase 8; the issue gets both now. | Locally: `node --test "tests/*.test.js"`. After the merge and owner steps 4 to 8: the `sync-agents` run lists the environments, skills and agents it created; a test issue starts a run `session #<N> triage`, then gets the triage comment from the agent identity and a dispatcher comment with the session link and its cost. |
+| 4 to 10 | Not started. | |
+
+Phase 3's first live run confirms what the docs leave open; each is named once in the code, so a fix is one line:
+
+- The event type of the agent's messages, `agent.message` (`cloud/dispatcher/platform/session.js`).
+- An App installation token as a `github_repository` resource's `authorization_token` (Q1).
+- The skill upload's form fields `files[]` and `display_title`, the path `/v1/skills/{id}/versions`, the tool set `agent_toolset_20260401` and the environment networking `unrestricted` for the web environment (`cloud/dispatcher/platform/client.js`, `sync.js`). If the skills listing doesn't return `display_title`, every sync uploads the skills again.
 
 ## Phase 0: to confirm before building
 
@@ -184,7 +203,7 @@ Answered from the official docs on 2026-11-16. Sources: Managed Agents docs at `
 
 ## What the owner does by hand
 
-In this order. None of it is needed before merging phases 1 and 2; steps 4 to 6 are needed before phase 3.
+In this order. None of it is needed before merging phases 1 to 3; steps 4 to 6 are needed before step 8, which turns the sessions on.
 
 1. **Merge phase 1 and phase 2.** Each is a pull request from a `cloud-build/` branch; read and merge them.
 2. **Make the repository public** (Settings, General, Danger Zone, Change visibility), as D2 decided, or confirm the account has GitHub Pro. Without one of them the ruleset in step 3 isn't enforced.
@@ -203,3 +222,5 @@ In this order. None of it is needed before merging phases 1 and 2; steps 4 to 6 
    - Install App, only select repositories, `Agents`.
    - The Claude GitHub App (`/install-github-app`, acting as `claude[bot]`) is a different App and doesn't do this step (D51).
 6. **Stop switch, ready to use.** Settings, Secrets and variables, Actions, Variables: create `CLOUD_STOPPED` with the value `false`. Setting it to `true` stops all starts.
+7. **Sync the agents.** After phase 3 is merged and step 4 is done: Actions, `sync-agents`, Run workflow. It also runs on every merge to `main` that changes `cloud/agents/`, `preset/skills/`, `preset/agents/` or `cloud/settings.json`. Its log lists the environments `agents-repo` and `agents-web`, the skills it uploaded and the agents `agents-<role>` it created or updated. If it fails on a request, copy the error into the next session: the platform's field names it uses are unconfirmed (Status, phase 3).
+8. **Go live.** In a pull request, set `"mode": "live"` in `cloud/settings.json` and merge it. From then on a new issue starts a run `session #<N> triage`. The `dispatch` job fails with a list of what's missing while step 4 or 5 isn't done. Back to `"dry-run"`, or `CLOUD_STOPPED` set to `true`, stops new sessions; a running one ends at its hard limit or time limit.

@@ -79,6 +79,17 @@ function revertUntrustedChanges(plan, view, settings) {
   if (reverted.length) {
     plan.say.push(`Reverted: ${reverted.join('; ')}. Only the owner sets state, origin, \`approved\`, \`budget:extend\` and \`paused\`, and only the owner lowers a merge class.`);
   }
+  // D26: GitHub doesn't say who created a label, so a label the agent identity put on an
+  // issue that cloud/labels.json doesn't list comes off again.
+  const foreign = [...plan.labels].filter((label) => {
+    if (L.ALL.includes(label)) return false;
+    const i = lastLabelEvent(timeline, label);
+    return i >= 0 && timeline[i].type === 'labeled' && actorKind(timeline[i].actor, settings) === 'agent';
+  });
+  for (const label of foreign) plan.removeLabel(label);
+  if (foreign.length) {
+    plan.say.push(`Removed ${foreign.map(code).join(', ')}: the agent identity added ${foreign.length > 1 ? 'them' : 'it'}, and agents use only the labels in \`cloud/labels.json\` (D26).`);
+  }
 }
 
 function originFor(author, settings) {
@@ -300,6 +311,8 @@ function hardLimit(role, plan, record, ctx) {
   return roundCents(limit);
 }
 
+const SESSION_RETRIES = 1; // CW-16: one retry, then the owner
+
 // CW-11, CW-12, CW-14, CW-80, CW-84: which agent the state calls for, if it may start.
 function startAgent(plan, view, facts, ctx) {
   const state = plan.state;
@@ -337,6 +350,19 @@ function startAgent(plan, view, facts, ctx) {
   if (unset.length) return plan.notes.push(`no session starts while caps are unset: ${unset.join(', ')}`);
   const limitUsd = hardLimit(role, plan, { ...facts.record, ...plan.record }, ctx);
   if (!(limitUsd > 0)) return plan.notes.push('nothing is left of the cap for this session');
+  // The dispatcher requested a session and no run of it is active any more: the run ended
+  // without reporting (a crash or a time-out of the job). CW-16 counts it as a failure.
+  const lost = facts.record.session;
+  if (lost) {
+    const failures = Number(facts.record.failures || 0) + 1;
+    plan.remember({ session: null });
+    if (failures > SESSION_RETRIES) {
+      plan.remember({ failures: null });
+      return toNeedsAnswer(plan, state, `the ${lost.role} session run ended without a result ${failures} times`, 'Not retrying again.');
+    }
+    plan.remember({ failures });
+    plan.say.push(`The ${lost.role} session run ended without a result. Retrying once.`);
+  }
   plan.start = { role, limitUsd };
   if (state === 'ready') plan.setState('in-progress');
   return undefined;
@@ -392,4 +418,4 @@ function decideAll(views, ctx) {
   return staged.map((s) => s.plan);
 }
 
-module.exports = { decideIssue, decideAll, decideState, readFacts, ROLE_FOR_STATE };
+module.exports = { decideIssue, decideAll, decideState, readFacts, toNeedsAnswer, ROLE_FOR_STATE, SESSION_RETRIES };

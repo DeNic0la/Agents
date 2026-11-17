@@ -16,6 +16,7 @@
     "webEnvironment": "agents-web",
     "sessionLink": "https://platform.claude.com/sessions/{id}",
     "tokenRotationMinutes": 50,
+    "requestMarginUsd": 0.15,
     "sessionTimeoutMinutes": 330
   },
   "caps": {

@@ -13,6 +13,8 @@ const LIST_FIELD = 'data'; // response field holding the items of a list
 const AFTER_PARAM = 'after'; // events listing: only events after this event id
 const METADATA_FIELD = 'metadata'; // session create: free-form string map (unconfirmed)
 const ROTATE_METHOD = 'POST'; // method of the resource token rotation call (unconfirmed)
+const SKILL_FILES_FIELD = 'files[]'; // skill upload: multipart field that carries each file
+const SKILL_TITLE_FIELD = 'display_title'; // skill upload: form field and list field with the title (unconfirmed)
 
 class PlatformError extends Error {
   constructor(status, path, message) {
@@ -67,9 +69,10 @@ function createPlatformClient({
 }) {
   const base = apiUrl.replace(/\/+$/, '');
 
-  function headers(hasBody) {
+  function headers(hasBody, multipart) {
     const h = { 'x-api-key': apiKey, 'anthropic-version': API_VERSION, 'anthropic-beta': BETA };
-    if (hasBody) h['content-type'] = 'application/json';
+    // fetch sets the multipart content type with its boundary itself
+    if (hasBody && !multipart) h['content-type'] = 'application/json';
     return h;
   }
 
@@ -81,6 +84,7 @@ function createPlatformClient({
 
   async function request(method, path, body, query) {
     const hasBody = body !== undefined && body !== null;
+    const multipart = hasBody && typeof FormData !== 'undefined' && body instanceof FormData;
     const secrets = [apiKey, ...collectTokens(body, [])].filter(Boolean);
     const scrub = (s) => secrets.reduce((acc, x) => acc.split(x).join('[redacted]'), String(s));
     let qs = '';
@@ -92,8 +96,8 @@ function createPlatformClient({
     for (let attempt = 0; ; attempt++) {
       const res = await fetchImpl(base + path + qs, {
         method,
-        headers: headers(hasBody),
-        body: hasBody ? JSON.stringify(body) : undefined,
+        headers: headers(hasBody, multipart),
+        body: !hasBody ? undefined : multipart ? body : JSON.stringify(body),
       });
       if ((res.status === 429 || res.status >= 500) && attempt < MAX_RETRIES) {
         await sleep(delayMs(res, attempt));
@@ -123,7 +127,18 @@ function createPlatformClient({
     return all;
   }
 
+  // files: [[path, content]]; every path starts with the one top-level skill folder.
+  function skillForm(files, title) {
+    const form = new FormData();
+    if (title) form.set(SKILL_TITLE_FIELD, title);
+    for (const [filePath, content] of files) form.append(SKILL_FILES_FIELD, new Blob([content]), filePath);
+    return form;
+  }
+
   return {
+    listSkills: () => listAll('/v1/skills'),
+    createSkill: (files, title) => request('POST', '/v1/skills', skillForm(files, title)),
+    createSkillVersion: (id, files, title) => request('POST', `/v1/skills/${id}/versions`, skillForm(files, title)),
     listAgents: () => listAll('/v1/agents'),
     getAgent: (id) => request('GET', `/v1/agents/${id}`),
     createAgent: (body) => request('POST', '/v1/agents', body),
@@ -151,4 +166,4 @@ function createPlatformClient({
   };
 }
 
-module.exports = { createPlatformClient, PlatformError, usdToBudget, costUsd, sessionPhase };
+module.exports = { createPlatformClient, SKILL_TITLE_FIELD, PlatformError, usdToBudget, costUsd, sessionPhase };

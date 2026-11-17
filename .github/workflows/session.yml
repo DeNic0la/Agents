@@ -1,0 +1,56 @@
+# One agent session for one issue (cloud/dispatcher/session-cli.js). The dispatcher starts
+# it through workflow_dispatch, the one event GITHUB_TOKEN may trigger. The hard limit comes
+# from the dispatcher's record on the issue, never from the inputs, and a run the issue's
+# state no longer calls for ends without starting anything.
+name: session
+run-name: "session #${{ inputs.issue }} ${{ inputs.role }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Issue number
+        required: true
+        type: string
+      role:
+        description: Agent role
+        required: true
+        type: choice
+        options: [triage, refine, implement, review]
+
+# issues: write for the dispatcher's comment and labels; actions: write to start the next
+# dispatch run. The agent identity's token is minted from the App's key inside the job.
+permissions:
+  contents: read
+  issues: write
+  actions: write
+
+concurrency:
+  group: session-${{ inputs.issue }}
+  cancel-in-progress: false
+
+jobs:
+  session:
+    # The dispatcher (GITHUB_TOKEN) or the owner; nobody else may spend the budget.
+    if: github.actor == 'github-actions[bot]' || github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    # cloud/settings.json platform.sessionTimeoutMinutes (330) plus the time to apply the result.
+    timeout-minutes: 345
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node cloud/dispatcher/session-cli.js
+        env:
+          ISSUE: ${{ inputs.issue }}
+          ROLE: ${{ inputs.role }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CLOUD_STOPPED: ${{ vars.CLOUD_STOPPED }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AGENT_APP_ID: ${{ vars.AGENT_APP_ID }}
+          AGENT_APP_PRIVATE_KEY: ${{ secrets.AGENT_APP_PRIVATE_KEY }}
