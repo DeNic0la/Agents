@@ -1,0 +1,42 @@
+# Reviews the owner's own pull requests with the Claude GitHub App (build plan D51), billed to
+# the owner's subscription. Agent pull requests get the cloud review agent instead, so this one
+# skips them. To keep the weekly plan usage down it reviews when a pull request opens or becomes
+# ready, not on every push; ask for another review with an `@claude` comment.
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, reopened]
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  claude-review:
+    # Opened by the owner, and this event caused by the owner: a collaborator reopening or marking
+    # ready the owner's pull request starts no review billed to the owner.
+    if: github.event.pull_request.user.login == github.repository_owner && github.actor == github.repository_owner && !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code Review
+        id: claude-review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
+          plugins: 'code-review@claude-code-plugins'
+          prompt: '/code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
+          claude_args: '--allowedTools "mcp__github_inline_comment__create_inline_comment"'
+          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
