@@ -11,7 +11,7 @@ const { createClient } = require('./github/client');
 const { loadIssueView, listOpenIssues, listClosedSince } = require('./github/snapshot');
 const { applyPlan, dryRunComment } = require('./github/apply');
 const { decideAll, readFacts } = require('./decide');
-const { activeSessionIssues, dispatchWorkflow, SESSION_WORKFLOW } = require('./github/actions');
+const { activeSessionIssues, dispatchWorkflow, SESSION_WORKFLOW, MERGE_GATE_WORKFLOW } = require('./github/actions');
 const { closingIssues } = require('./decide/spec');
 const L = require('./decide/labels');
 const { settingsProblems } = require('./decide/settings');
@@ -120,6 +120,9 @@ async function main() {
     if (live && plan.start) plan.remember({ session: { role: plan.start.role, limitUsd: plan.start.limitUsd, at: new Date().toISOString() } });
     await applyPlan(client, plan, settings.mode);
     if (live && plan.start) await dispatchWorkflow(client, SESSION_WORKFLOW, env.DEFAULT_BRANCH || 'main', { issue: plan.number, role: plan.start.role });
+    // CW-63: merge-gate reads the record just written; its run then starts the merge job.
+    const check = plan.record.mergeCheck;
+    if (live && check && check.pull) await dispatchWorkflow(client, MERGE_GATE_WORKFLOW, env.DEFAULT_BRANCH || 'main', { pr: String(check.pull) });
     const summary = dryRunComment(plan);
     console.log(`#${plan.number}: ${summary ? summary.split('\n').filter((l) => l.startsWith('- ')).join(' ') : 'nothing to do'}`);
   }

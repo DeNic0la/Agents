@@ -83,4 +83,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { targetOf };
+module.exports = { targetOf, loadIssue };

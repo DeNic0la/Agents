@@ -66,6 +66,47 @@ function mapIssue(issue) {
   };
 }
 
+// The issue's pull request as the rules see it. `mergeable` is null while GitHub computes it.
+function mapPull(pr, { closedBy = null, files = null } = {}) {
+  return {
+    number: pr.number,
+    title: pr.title || '',
+    author: loginOf(pr.user),
+    state: pr.state,
+    draft: Boolean(pr.draft),
+    merged: Boolean(pr.merged),
+    mergedBy: loginOf(pr.merged_by),
+    mergeSha: pr.merge_commit_sha || null,
+    closedBy,
+    headSha: pr.head && pr.head.sha,
+    headRef: pr.head && pr.head.ref,
+    mergeable: pr.mergeable === undefined ? null : pr.mergeable,
+    mergeableState: pr.mergeable_state || null,
+    files,
+  };
+}
+
+// CW-62: the changed files for the merge class rules. `executable` comes from the file mode
+// at the head commit (100755); a path missing from a truncated tree stays unknown.
+function mapFiles(rawFiles, tree) {
+  const modes = new Map(((tree && tree.tree) || []).map((t) => [t.path, t.mode]));
+  return (rawFiles || []).map((f) => ({
+    path: f.filename,
+    previousPath: f.previous_filename || null,
+    status: f.status,
+    additions: f.additions || 0,
+    deletions: f.deletions || 0,
+    executable: modes.has(f.filename) ? modes.get(f.filename) === '100755' : undefined,
+  }));
+}
+
+async function loadPullFiles(client, pr) {
+  const r = `/repos/${client.repo}`;
+  const raw = await client.paginate(`${r}/pulls/${pr.number}/files`);
+  const tree = await optional(client.request('GET', `${r}/git/trees/${pr.head.sha}?recursive=1`), null);
+  return mapFiles(raw, tree);
+}
+
 async function optional(promise, fallback) {
   try {
     return await promise;
@@ -92,7 +133,8 @@ async function loadIssueView(client, number) {
     const pr = await client.request('GET', `${r}/pulls/${n}`);
     if (!closingIssues(pr.body).includes(number)) continue;
     const closedBy = pr.state === 'closed' ? loginOf((await client.request('GET', `${r}/issues/${n}`)).closed_by) : null;
-    pull = { number: n, author: loginOf(pr.user), state: pr.state, merged: Boolean(pr.merged), closedBy, headSha: pr.head && pr.head.sha };
+    const files = pr.state === 'open' ? await loadPullFiles(client, pr) : null;
+    pull = mapPull(pr, { closedBy, files });
     break;
   }
 
@@ -121,4 +163,4 @@ async function listIssueIndex(client, max = 500) {
   return all.map(mapIssue).filter((i) => !i.isPull).slice(0, max).map(({ number, title, state }) => ({ number, title, state }));
 }
 
-module.exports = { mapTimeline, referencingPulls, mapIssue, loadIssueView, listOpenIssues, listClosedSince, listIssueIndex };
+module.exports = { mapTimeline, referencingPulls, mapIssue, mapPull, mapFiles, loadPullFiles, loadIssueView, listOpenIssues, listClosedSince, listIssueIndex };

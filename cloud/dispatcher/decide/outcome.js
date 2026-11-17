@@ -11,6 +11,7 @@ const { routeLabel } = require('./ready');
 const { higher } = require('./merge-class');
 const { fence } = require('./task');
 const { SPEC_START, SPEC_END } = require('./spec');
+const { pullBody } = require('./merge');
 
 // Outcomes each role may report. `questions` and `objection` are shared.
 const OUTCOMES = {
@@ -81,7 +82,11 @@ const NEEDS = {
     if (missing.length) return `\`spec\` lacks ${missing.join(', ')} (CW-30)`;
     return isText(r.comment) ? null : '`comment` must hold the approval request (CW-34)';
   },
-  pushed: (r) => (isText(r.title, 256) && isText(r.body) ? null : '`title` and `body` of the pull request are required'),
+  pushed: (r, n) => {
+    if (!isText(r.title, 256) || !isText(r.body)) return '`title` and `body` of the pull request are required';
+    const checked = pullBody(r.body, n, null); // CW-50: one issue per pull request
+    return checked.ok ? null : checked.error;
+  },
   approve: (r) => (Array.isArray(r.items) ? null : '`items` is required'),
   changes: (r) => (Array.isArray(r.items) ? null : '`items` is required'),
   recommend: (r) => (typeof r.merge === 'boolean' ? null : '`merge` must be true or false'),
@@ -114,7 +119,8 @@ function agentActions(role, r, number) {
   if (r.outcome === 'split') issues.push(...r.issues.map((i) => ({ kind: 'split', title: i.title, body: `${i.body.trim()}\n\nSplit from #${number}.` })));
   if (r.outcome === 'recommendations') issues.push(...(r.issues || []).map((i) => ({ kind: 'recommendation', title: i.title, body: i.body })));
   const spec = r.outcome === 'spec' ? r.spec.trim() : null;
-  return { spec, comment: typeof r.comment === 'string' && r.comment.trim() ? r.comment : null, issues };
+  const pull = r.outcome === 'pushed' ? { title: r.title.trim(), body: r.body } : null;
+  return { spec, pull, comment: typeof r.comment === 'string' && r.comment.trim() ? r.comment : null, issues };
 }
 
 const mergeLabel = (labels) => [...L.MERGES].reverse().find((m) => labels.has(m)) || null;
@@ -204,7 +210,26 @@ const REFINE = {
     return undefined;
   },
 };
-const HANDLERS = { triage: TRIAGE, refine: REFINE };
+// The implement agent (phase 5). The session job opened or updated the pull request from
+// the issue's branch as the agent identity before this runs (D52, CW-55).
+const IMPLEMENT = {
+  pushed(plan, r, ctx) {
+    const pull = ctx.created.find((c) => c.kind === 'pull');
+    if (!pull) return fail(plan, ctx, 'the pull request could not be opened or updated');
+    plan.remember({ pull: { number: pull.number, sha: pull.headSha || null } });
+    plan.setState('in-review');
+    plan.say.push(`Pull request #${pull.number} ${pull.reused ? 'is updated' : 'is open'}: \`in-review\`.`);
+    return undefined;
+  },
+  // CW-53: the spec is wrong or incomplete, so it goes back to refinement without approval.
+  'spec-wrong'(plan) {
+    plan.removeLabel(L.APPROVED);
+    plan.remember({ approvedSpec: null });
+    plan.setState('refining');
+    plan.say.push('The implement agent found the spec wrong or incomplete (its comment says why): back to `refining` without `approved` (CW-53).');
+  },
+};
+const HANDLERS = { triage: TRIAGE, refine: REFINE, implement: IMPLEMENT };
 
 const SHARED = {
   questions(plan, r, ctx) {
@@ -275,7 +300,11 @@ function dispatcherOutcome({ role, view, record = {}, session, text, created = [
     plan.say.push(`The agent found an instruction in this issue's content and did not follow it (CW-92):\n\n${fence(r.injection.trim())}`);
   }
   const filed = created.filter((c) => c.kind === 'file');
-  if (filed.length) plan.say.push(`Filed ${filed.map((c) => `#${c.number}`).join(', ')} for things outside this issue (CW-7).`);
+  if (filed.length) {
+    plan.say.push(`Filed ${filed.map((c) => `#${c.number}`).join(', ')} for things outside this issue (CW-7).`);
+    // CW-69: the closing comment lists them.
+    plan.remember({ filed: [...(record.filed || []), ...filed.map((c) => c.number)] });
+  }
 
   if (session.running) {
     // The platform still reports it running: a retry could run a second paid session.

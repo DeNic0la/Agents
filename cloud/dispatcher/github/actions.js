@@ -5,6 +5,8 @@
 
 const SESSION_WORKFLOW = 'session.yml';
 const DISPATCH_WORKFLOW = 'dispatch.yml';
+const MERGE_GATE_WORKFLOW = 'merge-gate.yml';
+const MERGE_WORKFLOW = 'merge.yml';
 const ACTIVE_STATUSES = ['queued', 'in_progress', 'waiting', 'pending', 'requested'];
 
 const runName = (issue, role) => `session #${issue} ${role}`;
@@ -33,4 +35,4 @@ function dispatchWorkflow(client, workflow, ref, inputs) {
   return client.request('POST', `/repos/${client.repo}/actions/workflows/${workflow}/dispatches`, body);
 }
 
-module.exports = { activeSessionIssues, dispatchWorkflow, parseRunName, runName, SESSION_WORKFLOW, DISPATCH_WORKFLOW };
+module.exports = { activeSessionIssues, dispatchWorkflow, parseRunName, runName, SESSION_WORKFLOW, DISPATCH_WORKFLOW, MERGE_GATE_WORKFLOW, MERGE_WORKFLOW };
