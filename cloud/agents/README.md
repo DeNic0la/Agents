@@ -56,7 +56,7 @@ Outcomes by role:
 | triage | `split` | `issues`: 2 to 5 `{ "title", "body" }` | creates them, each naming "Split from #N"; closes this one with links |
 | triage | `routed` | `route` (`direct`, `lean`, `full`), `merge` (`merge:self`, `merge:agent`, `merge:human`), `estimateUsd`, `acceptanceCheck` (required for `direct`, CW-27) | sets route and merge class; `direct` → `ready`, else `refining` (CW-21, CW-22) |
 | all but scout | `questions` | | `needs-answer` from the current state (CW-32) |
-| refine, plan | `spec` | `spec` (Markdown for the marked section), `estimateUsd` | writes the marked section; the comment is the approval request; `needs-approval` (CW-30, CW-31, CW-34) |
+| refine, plan | `spec` | `spec` (Markdown for the marked section), `estimateUsd` | writes the marked section; the comment is the approval request; `needs-approval` (CW-30, CW-31, CW-34). A plan agent's spec also needs the design, alternatives rejected, files affected and steps (D95) |
 | implement | `pushed` | `title`, `body` (pull request; lists each acceptance criterion and how it was met) | the session job opens or updates (reopens) the one pull request from `cloud/issue-<N>` as the agent; the body may close only #N; `in-review` (CW-50, CW-51, CW-55) |
 | implement | `spec-wrong` | | `refining` without `approved` (CW-53) |
 | review | `approve` | `items`: 1 to 50 `{ "item", "pass", "note" }`, all passing | posts the items as a table; `merge:agent` only (else `needs-answer`): records the approval at the head commit and runs `merge-gate`; the merge job merges when CI and `merge-gate` are green (CW-61, CW-64) |

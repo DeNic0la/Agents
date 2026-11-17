@@ -28,6 +28,8 @@ const MAX_COMMENT = 60000; // GitHub's limit is 65536 characters; the dispatcher
 const MAX_SPEC = 40000; // leaves room for the owner's text in the same body
 // CW-30: the parts every spec has. Recommendations are optional.
 const SPEC_PARTS = [['the outcome', /\boutcome\b/i], ['what is out of scope', /\bout of scope\b/i], ['acceptance criteria', /\bacceptance criteria\b/i]];
+// CW-31: what the full route's spec has as well (D95).
+const PLAN_PARTS = [['the design', /\bdesign\b/i], ['the alternatives rejected', /\balternatives?\b/i], ['the files affected', /\bfiles? affected\b|\baffected files?\b/i], ['the implementation steps', /\b(?:implementation )?steps\b/i]];
 const usd = (n) => `$${Number(n).toFixed(2)}`;
 const code = (s) => `\`${s}\``;
 const round = (n) => Math.round(n * 100) / 100;
@@ -124,7 +126,12 @@ function validateResult(role, r, number, settings) {
   }
   const check = NEEDS[r.outcome];
   const error = check ? check(r, number, settings) : null;
-  return error ? { ok: false, error } : { ok: true, error: null };
+  if (error) return { ok: false, error };
+  if (role === 'plan' && r.outcome === 'spec') {
+    const missing = PLAN_PARTS.filter(([, re]) => !re.test(r.spec)).map(([name]) => name);
+    if (missing.length) return { ok: false, error: `a full-route \`spec\` lacks ${missing.join(', ')} (CW-31)` };
+  }
+  return { ok: true, error: null };
 }
 
 // What the agent identity does on GitHub: the spec in the marked section (CW-8), its
@@ -228,12 +235,13 @@ const TRIAGE = {
   },
 };
 
-// The lean route's refine agent (phase 4); the full route's plan agent adds to it (phase 7).
+// The lean route's refine agent (phase 4) and the full route's plan agent (phase 7).
 const REFINE = {
   spec(plan, r, ctx) {
     // The session job wrote the spec into the marked section before this runs.
     if (!ctx.created.some((c) => c.kind === 'spec')) return fail(plan, ctx, 'the spec could not be written into the issue body');
-    plan.remember({ estimateUsd: r.estimateUsd });
+    // D94: the route the spec was written for, so a later change to `full` plans it again.
+    plan.remember({ estimateUsd: r.estimateUsd, specRoute: ctx.role === 'plan' ? 'full' : L.routeOf(routeLabel(plan.labels)) });
     plan.setState('needs-approval');
     // Raised here, so the approval request names the class that applies; the later call is a no-op.
     if (r.raiseMerge) raiseMerge(plan, r.raiseMerge, r.raiseReason.trim());
@@ -302,7 +310,7 @@ const REVIEW = {
   changes: (plan, r, ctx) => reviewed(plan, r, ctx, 'changes'),
   recommend: (plan, r, ctx) => reviewed(plan, r, ctx, r.merge ? 'recommend-merge' : 'recommend-not'),
 };
-const HANDLERS = { triage: TRIAGE, refine: REFINE, implement: IMPLEMENT, review: REVIEW };
+const HANDLERS = { triage: TRIAGE, refine: REFINE, plan: REFINE, implement: IMPLEMENT, review: REVIEW };
 
 const SHARED = {
   questions(plan, r, ctx) {

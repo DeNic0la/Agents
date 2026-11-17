@@ -31,7 +31,7 @@ const who = (login, settings) => `${KIND[actorKind(login, settings)]} (${login |
 const ROLE_TASK = {
   triage: 'Triage this issue: decide its route, merge class and cost, or end in one of the other triage outcomes.',
   refine: 'Refine this issue into a spec for the marked section of its body, or ask the questions that block it. If it has a spec already, revise it from the owner\'s comments since.',
-  plan: 'Plan this issue on the full route: write the spec and the plan for the marked section of its body.',
+  plan: 'Plan this issue on the full route: write the spec with its design, the alternatives rejected, the files affected and the implementation steps for the marked section of its body, or ask the questions that block it. If it has a spec already, revise it from the owner\'s comments since.',
   implement: 'Implement this issue\'s approved spec on its branch and push it.',
   review: 'Review the pull request for this issue against its spec and the Definition of Done.',
   scout: 'Scout for improvements to this repository and recommend the best ones as issues.',
