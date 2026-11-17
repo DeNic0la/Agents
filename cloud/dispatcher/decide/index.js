@@ -307,7 +307,8 @@ function checkConflict(plan, view, settings) {
 
 // CW-68: one round without a pass, from a review asking for changes or a failed `ci` at
 // a head commit (D90). Back to the implement agent, or after the configured rounds to the
-// owner with the open findings. The count resets when a review passes.
+// owner with the open findings. The count resets once the review and `ci` both passed at
+// the same head commit (D90; checkRoundPassed).
 function reviewRound(plan, record, settings, why) {
   const round = Number(record.reviewRounds || 0) + 1;
   const max = Number(settings.reviewRounds) || 3;
@@ -330,6 +331,14 @@ function checkCiFailed(plan, view, facts, settings) {
   if (facts.record.ciFailedSha === pr.headSha) return;
   plan.remember({ ciFailedSha: pr.headSha });
   reviewRound(plan, facts.record, settings, `\`ci\` failed on #${pr.number} at ${String(pr.headSha).slice(0, 7)}`);
+}
+
+// D90: a passing review alone doesn't end the rounds; `ci` must pass at the head it saw.
+function checkRoundPassed(plan, view, facts, settings) {
+  const pr = agentPull(view, settings);
+  const review = facts.record.review;
+  if (!facts.record.reviewRounds || !pr || !review || review.verdict === 'changes' || review.sha !== pr.headSha) return;
+  if (pr.ci && pr.ci.status === 'completed' && pr.ci.conclusion === 'success') plan.remember({ reviewRounds: null });
 }
 
 // CW-69: after the owner merged, the dispatcher posts the closing comment; after the
@@ -366,6 +375,7 @@ function handleState(plan, view, facts, settings) {
       if (plan.state === 'in-review') checkPullClosed(plan, view, settings);
       if (plan.state === 'in-review') checkConflict(plan, view, settings);
       if (plan.state === 'in-review') checkCiFailed(plan, view, facts, settings);
+      if (plan.state === 'in-review') checkRoundPassed(plan, view, facts, settings);
       if (['in-review', 'in-progress'].includes(plan.state)) checkMergeClass(plan, view, facts, settings);
       return undefined;
     case 'in-progress':

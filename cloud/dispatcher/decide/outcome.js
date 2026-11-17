@@ -66,7 +66,10 @@ const MAX_ITEMS = 50;
 function itemsError(r) {
   const ok = Array.isArray(r.items) && r.items.length >= 1 && r.items.length <= MAX_ITEMS
     && r.items.every((i) => i && isText(i.item, 300) && typeof i.pass === 'boolean' && (i.note === undefined || i.note === null || (typeof i.note === 'string' && i.note.length <= 2000)));
-  return ok ? null : `\`items\` must be 1 to ${MAX_ITEMS} \`{ item, pass, note }\``;
+  if (!ok) return `\`items\` must be 1 to ${MAX_ITEMS} \`{ item, pass, note }\``;
+  // D88: the comment as posted, escaping and verdict line included, must fit one comment.
+  const size = reviewComment(r).length;
+  return size <= MAX_COMMENT ? null : `the review comment would be ${size} characters, over ${MAX_COMMENT}; shorten the notes`;
 }
 
 // Extra fields per outcome: a check that returns an error text or null.
@@ -250,7 +253,8 @@ const IMPLEMENT = {
   pushed(plan, r, ctx) {
     const pull = ctx.created.find((c) => c.kind === 'pull');
     if (!pull) return fail(plan, ctx, 'the pull request could not be opened or updated');
-    plan.remember({ pull: { number: pull.number, sha: pull.headSha || null } });
+    // D87: a resubmission is reviewed again, even when only the pull request body changed.
+    plan.remember({ pull: { number: pull.number, sha: pull.headSha || null }, reviewedSha: null });
     plan.setState('in-review');
     plan.say.push(`Pull request #${pull.number} ${pull.reused ? 'is updated' : 'is open'}: \`in-review\`.`);
     return undefined;
@@ -271,6 +275,8 @@ const IMPLEMENT = {
 function reviewed(plan, r, ctx, verdict) {
   const pull = ctx.pull;
   if (!pull || !pull.headSha) return fail(plan, ctx, 'the pull request it reviewed is unknown');
+  // D88: a verdict counts only with its comment on the issue; the cost is recorded either way.
+  if (!ctx.created.some((c) => c.kind === 'comment')) return fail(plan, ctx, 'its review comment could not be posted');
   if (r.raiseMerge) raiseMerge(plan, r.raiseMerge, r.raiseReason.trim());
   const cls = mergeLabel(plan.labels);
   const at = `#${pull.number} at ${pull.headSha.slice(0, 7)}`;
@@ -287,7 +293,6 @@ function reviewed(plan, r, ctx, verdict) {
     const failed = r.items.filter((i) => i.pass === false).length;
     return reviewRound(plan, ctx.record, ctx.settings, `the review asked for changes to ${at}, ${failed} item${failed === 1 ? '' : 's'} failed (its comment lists them)`);
   }
-  plan.remember({ reviewRounds: null });
   if (verdict === 'approved') plan.say.push(`The review agent approved ${at} (CW-64). The agent merges it when \`ci\` and \`merge-gate\` are green.`);
   else plan.say.push(`The review agent ${verdict === 'recommend-merge' ? 'recommends merging' : 'recommends not merging'} ${at}; it is \`merge:human\`, so the owner decides (CW-65).`);
   return undefined;

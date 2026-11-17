@@ -14,7 +14,7 @@ const { dispatchWorkflow, DISPATCH_WORKFLOW, MERGE_GATE_WORKFLOW } = require('./
 const { readFacts, ROLE_FOR_STATE } = require('./decide');
 const { Plan } = require('./decide/plan');
 const L = require('./decide/labels');
-const { taskMessage } = require('./decide/task');
+const { taskMessage, fence } = require('./decide/task');
 const { withSpec, splitBody } = require('./decide/spec');
 const { agentActions, dispatcherOutcome, parseResult, validateResult, scrubSecrets } = require('./decide/outcome');
 const { branchName, pullBody, pullToReuse, mergeLabelOf, mergeClassCheck } = require('./decide/merge');
@@ -84,16 +84,19 @@ function reviewRoundSection(record, settings) {
 
 // CW-60, CW-61: the review agent sees the pull request's head commit, its merge class and
 // what the changed files allow (CW-62).
+// The title and the reasons (taken from file paths) come from GitHub: fenced, as data (CW-92).
 function pullSection(pull, check) {
-  const reasons = check.reasons.length ? check.reasons.join('; ') : 'nothing in the changed files raises it';
-  return {
-    title: 'Pull request',
-    text: [
-      `Review #${pull.number} (${pull.title}) at head commit ${pull.headSha}, branch \`${pull.headRef}\`, which is mounted.`,
-      `Its merge class is \`${check.effective}\`. The lowest class the changed files allow is \`${check.computed}\`: ${reasons}.`,
-      'Your verdict is for this head commit only: a later push gets a new review.',
-    ].join(' '),
-  };
+  const lines = [
+    `Review #${pull.number} at head commit ${pull.headSha}, branch \`${pull.headRef}\`, which is mounted. Your verdict is for this head commit only: a later push gets a new review.`,
+    `Its merge class is \`${check.effective}\`. The lowest class the changed files allow is \`${check.computed}\`.`,
+    '',
+    'Its title, from GitHub:',
+    '',
+    fence(pull.title),
+  ];
+  if (check.reasons.length) lines.push('', `What in the changed files raises the class, from their paths:`, '', fence(check.reasons.join('\n')));
+  else lines.push('', 'Nothing in the changed files raises the class.');
+  return { title: 'Pull request', text: lines.join('\n') };
 }
 
 // The pull request changed while the review ran: its verdict is about an older commit.
@@ -225,7 +228,10 @@ async function runForIssue({ issue, role, settings, gh, agentClient, platform, m
       }
     }
     // An approval request without its spec would ask for approval of nothing.
-    if (actions.comment && !specFailed) await agent.request('POST', `/repos/${agent.repo}/issues/${issue}/comments`, { body: actions.comment });
+    if (actions.comment && !specFailed) {
+      await agent.request('POST', `/repos/${agent.repo}/issues/${issue}/comments`, { body: actions.comment });
+      created.push({ kind: 'comment' });
+    }
   }
   const reviewed = role === 'review' && before.pull ? { number: before.pull.number, headSha: before.pull.headSha } : null;
   const { plan } = dispatcherOutcome({ role, view, record: facts.record, session, text: session.text, created, settings, stale, pull: reviewed });

@@ -307,6 +307,19 @@ test('CW-68, D90: a failed `ci` at the head commit is a review round, counted on
   assert.match(last.say.join('\n'), /3 review rounds ended without a pass/);
 });
 
+test('D90: the review rounds end only when the review and ci both passed at the same head commit', () => {
+  const approved = { review: { pull: 9, sha: 'abc1234', verdict: 'approved' }, reviewedSha: 'abc1234', reviewRounds: 2 };
+  const green = { ci: { status: 'completed', conclusion: 'success' } };
+  assert.equal(decide(reviewView({ merge: 'merge:agent', pull: green, record: approved })).record.reviewRounds, null);
+  // An approval while ci still runs, or of an older commit, keeps the count.
+  assert.equal(decide(reviewView({ merge: 'merge:agent', pull: { ci: { status: 'in_progress', conclusion: null } }, record: approved })).record.reviewRounds, undefined);
+  assert.equal(decide(reviewView({ merge: 'merge:agent', pull: { ...green, headSha: 'fff0000' }, record: approved })).record.reviewRounds, undefined);
+  // An approval and then a failed ci at that head is the next round, not round 1 again.
+  const failed = decide(reviewView({ merge: 'merge:agent', pull: { ci: { status: 'completed', conclusion: 'failure' } }, record: approved }));
+  assert.equal(failed.state, 'needs-answer');
+  assert.match(failed.say.join('\n'), /3 review rounds ended without a pass/);
+});
+
 test('CW-11: the owner answering restores the state the issue came from and starts its agent', () => {
   const labels = ['origin:owner', 'route:lean', 'merge:agent', 'needs-answer'];
   const p = decide(view({

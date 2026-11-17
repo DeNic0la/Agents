@@ -1044,7 +1044,7 @@ const ITEMS = [{ item: 'AC1: the flag exists', pass: true, note: 'bin/agents:40'
 const FAILING = [ITEMS[0], { item: 'DoD: docs updated', pass: false, note: 'README | table not updated' }];
 const APPROVE = { outcome: 'approve', items: ITEMS };
 const PULL = { number: 50, headSha: 'abc1234def' };
-const review = (result, over = {}) => outcome({ role: 'review', labels: REVIEWING(over.merge), result, pull: PULL, ...over });
+const review = (result, over = {}) => outcome({ role: 'review', labels: REVIEWING(over.merge), result, pull: PULL, created: [{ kind: 'comment' }], ...over });
 
 test('CW-61: a review states its result per item, and the verdict must fit the items', () => {
   const v = (r) => validateResult('review', r, 7, settings);
@@ -1074,7 +1074,8 @@ test('CW-64: an approval of merge:agent is recorded at the head commit merge-gat
   assert.equal(plan.state, 'in-review');
   assert.deepEqual(plan.record.review, { pull: 50, sha: 'abc1234def', verdict: 'approved' });
   assert.equal(plan.record.reviewedSha, 'abc1234def');
-  assert.equal(plan.record.reviewRounds, null);
+  // D90: the rounds end only once ci passed at this head as well (dispatcher).
+  assert.equal(plan.record.reviewRounds, undefined);
   assert.match(said(plan), /The review agent approved #50 at abc1234 \(CW-64\)/);
 });
 
@@ -1114,6 +1115,27 @@ test('CW-68: changes send the issue back to in-progress until the review rounds 
   assert.match(said(last), /3 review rounds ended without a pass \(CW-68\)/);
 });
 
+test('D88: a review whose comment was not posted records no verdict and retries', () => {
+  const { plan } = review(APPROVE, { created: [] });
+  assert.equal(plan.state, 'in-review');
+  assert.equal(plan.record.review, undefined);
+  assert.equal(plan.record.reviewedSha, undefined);
+  assert.equal(plan.record.failures, 1);
+  assert.equal(plan.record.totalUsd, 0.5);
+  assert.match(said(plan), /its review comment could not be posted/);
+});
+
+test('D88: a review comment over the comment limit is an invalid result', () => {
+  const items = Array.from({ length: 50 }, (_, i) => ({ item: `AC${i}`, pass: true, note: '|'.repeat(1300) }));
+  assert.match(validateResult('review', { outcome: 'approve', items }, 7, settings).error, /the review comment would be \d+ characters, over 60000/);
+});
+
+test('D87: a resubmission without a new commit is reviewed again', () => {
+  const { plan } = outcome({ role: 'implement', labels: BUILDING, record: { reviewedSha: 'abc1234def' }, result: PUSHED, created: [{ kind: 'pull', number: 50, headSha: 'abc1234def', reused: true }] });
+  assert.equal(plan.state, 'in-review');
+  assert.equal(plan.record.reviewedSha, null);
+});
+
 test('CW-16: a review without the pull request it saw is a failed session', () => {
   const { plan } = review(APPROVE, { pull: null });
   assert.equal(plan.state, 'in-review');
@@ -1129,7 +1151,9 @@ test('CW-60, CW-64: the review job mounts the pull request head, the agent posts
   assert.equal(await runForIssue(deps), 'done');
   const created = platform.log.created[0];
   assert.equal(created.resources[0].checkout.name, 'cloud/issue-7');
-  assert.match(created.initialMessage, /Review #50 \(Add --dry-run\) at head commit abc1234def/);
+  assert.match(created.initialMessage, /Review #50 at head commit abc1234def/);
+  // CW-92: the title comes from GitHub, so it is fenced as data.
+  assert.match(created.initialMessage, /Its title, from GitHub:\n\n```\nAdd --dry-run\n```/);
   assert.match(created.initialMessage, /Its merge class is `merge:agent`/);
 
   const posted = fg.writes.find((w) => w.who === 'agent' && w.path.endsWith('/issues/7/comments'));
