@@ -275,16 +275,17 @@ function fakeGitHub({ request = { role: 'implement', limitUsd: 6, at: '2026-11-1
   return gh;
 }
 
-function fakePlatform() {
+function fakePlatform(extra = {}) {
   const log = { interrupts: [] };
   const state = {
     s_run: { id: 's_run', status: 'running', metadata: { issue: '5', role: 'implement' }, created_at: '2026-11-17T10:01:00Z', usage: { list_cost: { amount: '120' } } },
     s_other: { id: 's_other', status: 'running', metadata: {}, created_at: '2026-11-17T10:30:00Z', usage: { list_cost: { amount: '10' } } },
+    ...extra,
   };
   return {
     log,
-    listAgents: async () => [{ id: 'ag_impl', name: 'agents-implement' }, { id: 'ag_tri', name: 'agents-triage' }, { id: 'ag_x', name: 'someone-else' }],
-    listSessions: async ({ agentId }) => (agentId === 'ag_impl' ? [state.s_run, state.s_other] : []),
+    listAgents: async () => [{ id: 'ag_impl', name: 'agents-implement' }, { id: 'ag_tri', name: 'agents-triage' }, { id: 'ag_rec', name: 'agents-record' }, { id: 'ag_x', name: 'someone-else' }],
+    listSessions: async ({ agentId }) => (agentId === 'ag_impl' ? [state.s_run, state.s_other] : agentId === 'ag_rec' ? Object.keys(extra).map((k) => state[k]) : []),
     interrupt: async (id) => {
       log.interrupts.push(id);
       state[id] = { ...state[id], status: 'idle', stop_reason: { type: 'end_turn' }, usage: { list_cost: { amount: id === 's_run' ? '150' : '10' } } };
@@ -359,4 +360,22 @@ test('CW-84: resume turns the workflows on and starts a full reconcile', async (
   assert.deepEqual(writes[n],['POST', '/repos/o/r/actions/workflows/dispatch.yml/dispatches', { ref: 'main', inputs: {} }]);
   assert.deepEqual(report.failed, []);
   assert.ok(lines.some((l) => /CLOUD_STOPPED is still `true`/.test(l)));
+});
+
+test('CW-43, CW-84: the stop also settles a record session on its closed issue, without a question', async () => {
+  const gh = fakeGitHub();
+  const closedIssue = { number: 9, title: 'GUI', state: 'closed', state_reason: 'not_planned', user: { login: OWNER }, body: 'x', labels: [] };
+  const tl9 = [{ event: 'closed', actor: { login: OWNER } }, { event: 'commented', actor: { login: BOT }, body: `Closed.\n\n${formatRecord({ intake: true, session: { role: 'record', limitUsd: 1, at: '2026-11-17T10:00:00Z' } })}` }];
+  const { request, paginate } = gh;
+  gh.request = async (m, p, b) => (m === 'GET' && p === '/repos/o/r/issues/9' ? (gh.calls.push([m, p, b]), closedIssue) : request(m, p, b));
+  gh.paginate = async (p) => (p.endsWith('/issues/9/timeline') ? tl9 : paginate(p));
+  const platform = fakePlatform({ s_rec: { id: 's_rec', status: 'running', metadata: { issue: '9', role: 'record' }, created_at: '2026-11-17T10:02:00Z', usage: { list_cost: { amount: '5' } } } });
+  let t = Date.parse('2026-11-17T11:00:00Z');
+  const report = await stopAll({ gh, platform, settings, now: () => t, sleep: async (ms) => { t += ms; }, log: () => {} });
+  assert.deepEqual(report.issues.sort(), [5, 9]);
+  assert.deepEqual(report.unmatched, ['s_other']);
+  const comment = gh.calls.find(([m, p]) => m === 'POST' && p === '/repos/o/r/issues/9/comments');
+  assert.match(comment[2].body, /ended the record session \[s_rec\]/);
+  assert.match(comment[2].body, /starts the record agent again/);
+  assert.ok(!gh.calls.some(([m, p]) => m === 'POST' && p === '/repos/o/r/issues/9/labels'));
 });

@@ -20,7 +20,8 @@ function issueCap(routeName, record, settings) {
 function costRecord(record, role, costUsd) {
   const cost = round(Number(costUsd || 0));
   const entry = { sessionCostUsd: cost, totalUsd: round(Number(record.totalUsd || 0) + cost) };
-  if (role !== 'triage') entry.spentUsd = round(Number(record.spentUsd || 0) + cost);
+  // Triage and record run on their per-run cap, not the issue's (CW-87, D114).
+  if (role !== 'triage' && role !== 'record') entry.spentUsd = round(Number(record.spentUsd || 0) + cost);
   return entry;
 }
 
