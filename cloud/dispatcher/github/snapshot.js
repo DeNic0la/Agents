@@ -67,7 +67,7 @@ function mapIssue(issue) {
 }
 
 // The issue's pull request as the rules see it. `mergeable` is null while GitHub computes it.
-function mapPull(pr, { closedBy = null, files = null } = {}) {
+function mapPull(pr, { closedBy = null, files = null, ci = null } = {}) {
   return {
     number: pr.number,
     title: pr.title || '',
@@ -83,6 +83,7 @@ function mapPull(pr, { closedBy = null, files = null } = {}) {
     mergeable: pr.mergeable === undefined ? null : pr.mergeable,
     mergeableState: pr.mergeable_state || null,
     files,
+    ci,
   };
 }
 
@@ -118,6 +119,16 @@ async function loadPullFiles(client, pr) {
   return mapFiles(raw, tree, baseTree);
 }
 
+// CW-68, D90: the newest `ci` check run at the head commit, or null before it starts.
+const mapCi = (body) => {
+  const run = [...((body && body.check_runs) || [])].sort((a, b) => b.id - a.id)[0];
+  return run ? { status: run.status, conclusion: run.conclusion || null } : null;
+};
+async function loadCi(client, pr) {
+  const r = `/repos/${client.repo}`;
+  return mapCi(await optional(client.request('GET', `${r}/commits/${pr.head.sha}/check-runs?check_name=ci&filter=latest`), null));
+}
+
 async function optional(promise, fallback) {
   try {
     return await promise;
@@ -145,7 +156,8 @@ async function loadIssueView(client, number) {
     if (!closingIssues(pr.body).includes(number)) continue;
     const closedBy = pr.state === 'closed' ? loginOf((await client.request('GET', `${r}/issues/${n}`)).closed_by) : null;
     const files = pr.state === 'open' ? await loadPullFiles(client, pr) : null;
-    pull = mapPull(pr, { closedBy, files });
+    const ci = pr.state === 'open' ? await loadCi(client, pr) : null;
+    pull = mapPull(pr, { closedBy, files, ci });
     break;
   }
 
@@ -174,4 +186,4 @@ async function listIssueIndex(client, max = 500) {
   return all.map(mapIssue).filter((i) => !i.isPull).slice(0, max).map(({ number, title, state }) => ({ number, title, state }));
 }
 
-module.exports = { mapTimeline, referencingPulls, mapIssue, mapPull, mapFiles, loadPullFiles, loadIssueView, listOpenIssues, listClosedSince, listIssueIndex };
+module.exports = { mapTimeline, referencingPulls, mapIssue, mapPull, mapFiles, mapCi, loadPullFiles, loadIssueView, listOpenIssues, listClosedSince, listIssueIndex };

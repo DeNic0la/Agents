@@ -34,8 +34,8 @@ const ROUTED = { outcome: 'routed', route: 'direct', merge: 'merge:self', estima
 const SESSION = { id: 'sesn_1', link: 'https://platform.claude.com/sessions/sesn_1', phase: 'done', costUsd: 0.5 };
 
 // Runs dispatcherOutcome for a result block, with sensible defaults.
-function outcome({ role = 'triage', result, text, labels = ['triage', 'origin:owner'], record = {}, session = SESSION, created = [], stale = false } = {}) {
-  return dispatcherOutcome({ role, view: ov(labels), record, session, text: text === undefined ? block(result) : text, created, settings, stale });
+function outcome({ role = 'triage', result, text, labels = ['triage', 'origin:owner'], record = {}, session = SESSION, created = [], stale = false, pull = null } = {}) {
+  return dispatcherOutcome({ role, view: ov(labels), record, session, text: text === undefined ? block(result) : text, created, settings, stale, pull });
 }
 const said = (plan) => plan.say.join('\n');
 
@@ -362,9 +362,9 @@ test('CW-7: filed issues are listed in the comment', () => {
 });
 
 test('an outcome the dispatcher cannot act on yet goes to the owner', () => {
-  const { plan } = outcome({ role: 'review', labels: ['in-review'], result: { outcome: 'approve', items: [] } });
+  const { plan } = outcome({ role: 'scout', labels: ['in-review'], result: { outcome: 'recommendations', issues: [] } });
   assert.equal(plan.state, 'needs-answer');
-  assert.match(said(plan), /can't act on the review outcome `approve` yet/);
+  assert.match(said(plan), /can't act on the scout outcome `recommendations` yet/);
 });
 
 // ---- Phase 4: the refine agent's spec ---------------------------------------------------
@@ -650,12 +650,15 @@ test('liveEnvProblems lists the missing variables', () => {
 
 // A fake GitHub: one issue, its timeline, and a log of every write in order.
 // `branches`: name -> head sha of the branches that exist; `pulls`: the pull requests from them.
-function fakeGitHub({ labels = ['triage', 'origin:owner'], timeline, state = 'open', role = 'triage', branches = {}, pulls = [] } = {}) {
+// `pull`: the raw pull request that closes #7, or a function returning it per read.
+function fakeGitHub({ labels = ['triage', 'origin:owner'], timeline, state = 'open', role = 'triage', branches = {}, pulls = [], pull = null, record = {} } = {}) {
   const writes = [];
   const raw = timeline || [
     ...labels.map((l) => ({ event: 'labeled', actor: { login: BOT }, label: { name: l } })),
-    { event: 'commented', actor: { login: BOT }, body: `Starting.\n\n${formatRecord({ state: labels.find((l) => ['triage', 'refining', 'ready', 'in-progress'].includes(l)), session: { role, limitUsd: 1, at: 'now' } })}` },
+    { event: 'commented', actor: { login: BOT }, body: `Starting.\n\n${formatRecord({ state: labels.find((l) => ['triage', 'refining', 'ready', 'in-progress', 'in-review'].includes(l)), session: { role, limitUsd: 1, at: 'now' }, ...record })}` },
+    ...(pull ? [{ event: 'cross-referenced', source: { issue: { number: 50, pull_request: {}, repository: { full_name: 'o/r' } } } }] : []),
   ];
+  const pr = () => (typeof pull === 'function' ? pull() : pull);
   const branch = (p) => {
     const m = /\/branches\/(.+)$/.exec(p);
     const sha = m && branches[decodeURIComponent(m[1])];
@@ -670,6 +673,7 @@ function fakeGitHub({ labels = ['triage', 'origin:owner'], timeline, state = 'op
     request: async (method, p, body) => {
       if (method === 'GET' && p === '/repos/o/r/issues/7') return issue;
       if (method === 'GET' && p.includes('/branches/')) return branch(p);
+      if (method === 'GET' && pull && p === '/repos/o/r/pulls/50') return pr();
       if (method === 'GET') throw Object.assign(new Error('unexpected GET'), { status: 404 });
       writes.push({ who: 'gh', method, path: p, body });
       return {};
@@ -678,6 +682,7 @@ function fakeGitHub({ labels = ['triage', 'origin:owner'], timeline, state = 'op
       if (p.endsWith('/issues/7/timeline')) return raw;
       if (p.includes('/dependencies/')) return [];
       if (p.includes('/issues?state=all')) return [issue, other];
+      if (pull && p.endsWith('/pulls/50/files')) return [{ filename: 'docs/guide.md', status: 'modified', additions: 3, deletions: 1 }];
       throw new Error(`unexpected paginate ${p}`);
     },
   };
@@ -1030,4 +1035,161 @@ test('CW-50: without the branch, the job mounts main, and a pushed result with n
   const comment = fg.writes.find((w) => w.who === 'gh' && w.path.endsWith('/comments'));
   assert.match(comment.body.body, /could not be opened or updated/);
   assert.equal(recordOf(comment).failures, 1);
+});
+
+// ---- review (phase 6) ---------------------------------------------------------------
+
+const REVIEWING = (merge = 'merge:agent') => ['in-review', 'origin:owner', 'route:direct', merge, 'approved'];
+const ITEMS = [{ item: 'AC1: the flag exists', pass: true, note: 'bin/agents:40' }, { item: 'DoD: docs updated', pass: true, note: 'README.md' }];
+const FAILING = [ITEMS[0], { item: 'DoD: docs updated', pass: false, note: 'README | table not updated' }];
+const APPROVE = { outcome: 'approve', items: ITEMS };
+const PULL = { number: 50, headSha: 'abc1234def' };
+const review = (result, over = {}) => outcome({ role: 'review', labels: REVIEWING(over.merge), result, pull: PULL, created: [{ kind: 'comment' }], ...over });
+
+test('CW-61: a review states its result per item, and the verdict must fit the items', () => {
+  const v = (r) => validateResult('review', r, 7, settings);
+  assert.equal(v(APPROVE).ok, true);
+  assert.match(v({ outcome: 'approve', items: FAILING }).error, /every item to pass/);
+  assert.match(v({ outcome: 'changes', items: ITEMS }).error, /at least one item that fails/);
+  assert.match(v({ outcome: 'approve', items: [] }).error, /`items` must be 1 to 50/);
+  assert.match(v({ outcome: 'approve', items: [{ item: 'x', pass: 'yes' }] }).error, /`items` must be/);
+  assert.match(v({ outcome: 'recommend', merge: true, items: ITEMS, explanation: 'ok' }).error, /`classReason` is required/);
+  assert.match(v({ outcome: 'recommend', merge: false, items: ITEMS }).error, /`explanation` is required/);
+  assert.equal(v({ outcome: 'recommend', merge: false, items: ITEMS, explanation: 'it breaks the installer' }).ok, true);
+});
+
+test('CW-61, CW-65: the agent posts the items as a table, and a recommendation in the fixed wording', () => {
+  const changes = agentActions('review', { outcome: 'changes', items: FAILING, comment: 'See the table.' }, 7).comment;
+  assert.match(changes, /^\*\*Review: changes requested\.\*\*/);
+  assert.ok(changes.includes('| DoD: docs updated | **fail** | README \\| table not updated |'));
+  assert.match(changes, /See the table\.$/);
+  const yes = agentActions('review', { outcome: 'recommend', merge: true, items: ITEMS, classReason: 'it changes the installer.', explanation: 'every item passes' }, 7).comment;
+  assert.match(yes, /^Recommend merging\. Human approval is required because it changes the installer\. Recommended because every item passes\.\n/);
+  const no = agentActions('review', { outcome: 'recommend', merge: false, items: ITEMS, explanation: 'the smoke tests fail' }, 7).comment;
+  assert.match(no, /^Recommend not merging, because the smoke tests fail\.\n/);
+});
+
+test('CW-64: an approval of merge:agent is recorded at the head commit merge-gate reads', () => {
+  const { plan } = review(APPROVE, { record: { reviewRounds: 1 } });
+  assert.equal(plan.state, 'in-review');
+  assert.deepEqual(plan.record.review, { pull: 50, sha: 'abc1234def', verdict: 'approved' });
+  assert.equal(plan.record.reviewedSha, 'abc1234def');
+  // D90: the rounds end only once ci passed at this head as well (dispatcher).
+  assert.equal(plan.record.reviewRounds, undefined);
+  assert.match(said(plan), /The review agent approved #50 at abc1234 \(CW-64\)/);
+});
+
+test('CW-64, CW-65, CW-67: a verdict the merge class does not allow goes to the owner and records nothing', () => {
+  const human = review(APPROVE, { merge: 'merge:human' }).plan;
+  assert.equal(human.state, 'needs-answer');
+  assert.equal(human.record.review, undefined);
+  assert.equal(human.record.reviewedSha, undefined);
+  assert.match(said(human), /only `merge:agent` is approved by an agent/);
+  // The agent's own raise counts: it can't raise to merge:human and approve.
+  const raised = review({ ...APPROVE, raiseMerge: 'merge:human', raiseReason: 'It touches the token handling.' }).plan;
+  assert.ok(raised.add.includes('merge:human'));
+  assert.equal(raised.state, 'needs-answer');
+  assert.equal(raised.record.review, undefined);
+  const rec = review({ outcome: 'recommend', merge: true, items: ITEMS, classReason: 'x', explanation: 'y' }).plan;
+  assert.equal(rec.state, 'needs-answer');
+  assert.match(said(rec), /recommended instead of approving/);
+});
+
+test('CW-65: a recommendation on merge:human is recorded and leaves the decision to the owner', () => {
+  const { plan } = review({ outcome: 'recommend', merge: false, items: ITEMS, explanation: 'it breaks Windows' }, { merge: 'merge:human' });
+  assert.equal(plan.state, 'in-review');
+  assert.deepEqual(plan.record.review, { pull: 50, sha: 'abc1234def', verdict: 'recommend-not' });
+  assert.match(said(plan), /recommends not merging #50 at abc1234; it is `merge:human`, so the owner decides/);
+});
+
+test('CW-68: changes send the issue back to in-progress until the review rounds run out', () => {
+  const first = review({ outcome: 'changes', items: FAILING }).plan;
+  assert.equal(first.state, 'in-progress');
+  assert.equal(first.record.reviewRounds, 1);
+  assert.equal(first.record.review.verdict, 'changes');
+  assert.match(said(first), /Review round 1 of 3: the review asked for changes to #50 at abc1234, 1 item failed/);
+  const last = review({ outcome: 'changes', items: FAILING }, { record: { reviewRounds: 2 } }).plan;
+  assert.equal(last.state, 'needs-answer');
+  assert.equal(last.record.reviewRounds, null);
+  assert.equal(last.record.waiting.from, 'in-progress');
+  assert.match(said(last), /3 review rounds ended without a pass \(CW-68\)/);
+});
+
+test('D88: a review whose comment was not posted records no verdict and retries', () => {
+  const { plan } = review(APPROVE, { created: [] });
+  assert.equal(plan.state, 'in-review');
+  assert.equal(plan.record.review, undefined);
+  assert.equal(plan.record.reviewedSha, undefined);
+  assert.equal(plan.record.failures, 1);
+  assert.equal(plan.record.totalUsd, 0.5);
+  assert.match(said(plan), /its review comment could not be posted/);
+});
+
+test('D88: a review comment over the comment limit is an invalid result', () => {
+  const items = Array.from({ length: 50 }, (_, i) => ({ item: `AC${i}`, pass: true, note: '|'.repeat(1300) }));
+  assert.match(validateResult('review', { outcome: 'approve', items }, 7, settings).error, /the review comment would be \d+ characters, over 60000/);
+});
+
+test('D87: a resubmission without a new commit is reviewed again', () => {
+  const { plan } = outcome({ role: 'implement', labels: BUILDING, record: { reviewedSha: 'abc1234def' }, result: PUSHED, created: [{ kind: 'pull', number: 50, headSha: 'abc1234def', reused: true }] });
+  assert.equal(plan.state, 'in-review');
+  assert.equal(plan.record.reviewedSha, null);
+});
+
+test('CW-16: a review without the pull request it saw is a failed session', () => {
+  const { plan } = review(APPROVE, { pull: null });
+  assert.equal(plan.state, 'in-review');
+  assert.equal(plan.record.failures, 1);
+  assert.match(said(plan), /the pull request it reviewed is unknown/);
+});
+
+const RAW_PULL = (sha = 'abc1234def') => ({ number: 50, title: 'Add --dry-run', state: 'open', user: { login: AGENT }, body: 'Adds it.\n\nCloses #7', head: { sha, ref: 'cloud/issue-7' }, mergeable: true, mergeable_state: 'clean' });
+
+test('CW-60, CW-64: the review job mounts the pull request head, the agent posts the items and merge-gate runs', async () => {
+  const fg = fakeGitHub({ labels: REVIEWING(), role: 'review', pull: RAW_PULL() });
+  const { deps, platform } = jobDeps(fg, block({ ...APPROVE, comment: 'Clean.' }), { role: 'review' });
+  assert.equal(await runForIssue(deps), 'done');
+  const created = platform.log.created[0];
+  assert.equal(created.resources[0].checkout.name, 'cloud/issue-7');
+  assert.match(created.initialMessage, /Review #50 at head commit abc1234def/);
+  // CW-92: the title comes from GitHub, so it is fenced as data.
+  assert.match(created.initialMessage, /Its title, from GitHub:\n\n```\nAdd --dry-run\n```/);
+  assert.match(created.initialMessage, /Its merge class is `merge:agent`/);
+
+  const posted = fg.writes.find((w) => w.who === 'agent' && w.path.endsWith('/issues/7/comments'));
+  assert.match(posted.body.body, /^\*\*Review: approve\.\*\*/);
+  assert.ok(posted.body.body.includes('| AC1: the flag exists | pass | bin/agents:40 |'));
+  assert.match(posted.body.body, /Clean\.$/);
+  const comment = fg.writes.find((w) => w.who === 'gh' && w.path.endsWith('/comments'));
+  assert.deepEqual(recordOf(comment).review, { pull: 50, sha: 'abc1234def', verdict: 'approved' });
+  const dispatches = fg.writes.filter((w) => w.path.endsWith('/dispatches')).map((w) => [w.path.split('/')[6], w.body.inputs]);
+  assert.deepEqual(dispatches, [['dispatch.yml', { issue: '7' }], ['merge-gate.yml', { pr: '50' }]]);
+});
+
+test('CW-64: a push during the review makes its verdict stale', async () => {
+  let reads = 0;
+  const fg = fakeGitHub({ labels: REVIEWING(), role: 'review', pull: () => RAW_PULL(reads++ ? 'fff0000' : 'abc1234def') });
+  const { deps } = jobDeps(fg, block(APPROVE), { role: 'review' });
+  await runForIssue(deps);
+  assert.ok(!fg.writes.some((w) => w.who === 'agent' && w.method === 'POST'));
+  const comment = fg.writes.find((w) => w.who === 'gh' && w.path.endsWith('/comments'));
+  assert.match(comment.body.body, /moved on while the session ran/);
+  assert.equal(recordOf(comment).review, undefined);
+  assert.ok(!fg.writes.some((w) => w.path.endsWith('merge-gate.yml/dispatches')));
+});
+
+test('CW-61: a review job without an open pull request fails without starting a session', async () => {
+  const fg = fakeGitHub({ labels: REVIEWING(), role: 'review' });
+  const { deps, platform } = jobDeps(fg, block(APPROVE), { role: 'review' });
+  assert.equal(await runForIssue(deps), 'failed');
+  assert.equal(platform.log.created.length, 0);
+  const comment = fg.writes.find((w) => w.who === 'gh' && w.path.endsWith('/comments'));
+  assert.match(comment.body.body, /no open pull request to review/);
+});
+
+test('CW-68: the implement task after a review names the round', async () => {
+  const fg = fakeGitHub({ labels: BUILDING, role: 'implement', branches: { 'cloud/issue-7': 'abc123' }, record: { reviewRounds: 2 } });
+  const { deps, platform } = jobDeps(fg, block(PUSHED), { role: 'implement' });
+  await runForIssue(deps);
+  assert.match(platform.log.created[0].initialMessage, /This is review round 2 of 3\. The newest review comment on this issue/);
 });

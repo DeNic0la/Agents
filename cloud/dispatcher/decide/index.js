@@ -305,6 +305,42 @@ function checkConflict(plan, view, settings) {
   plan.say.push(`#${pr.number} conflicts with the default branch: back to \`in-progress\`, so the implement agent brings the branch up to date (CW-55).`);
 }
 
+// CW-68: one round without a pass, from a review asking for changes or a failed `ci` at
+// a head commit (D90). Back to the implement agent, or after the configured rounds to the
+// owner with the open findings. The count resets once the review and `ci` both passed at
+// the same head commit (D90; checkRoundPassed).
+function reviewRound(plan, record, settings, why) {
+  const round = Number(record.reviewRounds || 0) + 1;
+  const max = Number(settings.reviewRounds) || 3;
+  if (round >= max) {
+    plan.remember({ reviewRounds: null });
+    return toNeedsAnswer(plan, 'in-progress', `${round} review rounds ended without a pass (CW-68); the last: ${why}`, 'Review rounds used up.');
+  }
+  plan.remember({ reviewRounds: round });
+  plan.setState('in-progress');
+  plan.say.push(`Review round ${round} of ${max}: ${why}. Back to \`in-progress\` (CW-68).`);
+  return undefined;
+}
+
+// CW-68, D90: `ci` failed at the head commit of the agent's pull request. Each failed head
+// commit counts once; a cancelled run (a newer push replaced it) doesn't count.
+const CI_FAILED = ['failure', 'timed_out'];
+function checkCiFailed(plan, view, facts, settings) {
+  const pr = agentPull(view, settings);
+  if (!pr || !pr.ci || pr.ci.status !== 'completed' || !CI_FAILED.includes(pr.ci.conclusion)) return;
+  if (facts.record.ciFailedSha === pr.headSha) return;
+  plan.remember({ ciFailedSha: pr.headSha });
+  reviewRound(plan, facts.record, settings, `\`ci\` failed on #${pr.number} at ${String(pr.headSha).slice(0, 7)}`);
+}
+
+// D90: a passing review alone doesn't end the rounds; `ci` must pass at the head it saw.
+function checkRoundPassed(plan, view, facts, settings) {
+  const pr = agentPull(view, settings);
+  const review = facts.record.review;
+  if (!facts.record.reviewRounds || !pr || !review || review.verdict === 'changes' || review.sha !== pr.headSha) return;
+  if (pr.ci && pr.ci.status === 'completed' && pr.ci.conclusion === 'success') plan.remember({ reviewRounds: null });
+}
+
 // CW-69: after the owner merged, the dispatcher posts the closing comment; after the
 // agent's merge, the merge job did, and when it couldn't, the dispatcher does (D86).
 // A merge by anyone else gets none.
@@ -338,6 +374,8 @@ function handleState(plan, view, facts, settings) {
       checkApprovedSpec(plan, facts);
       if (plan.state === 'in-review') checkPullClosed(plan, view, settings);
       if (plan.state === 'in-review') checkConflict(plan, view, settings);
+      if (plan.state === 'in-review') checkCiFailed(plan, view, facts, settings);
+      if (plan.state === 'in-review') checkRoundPassed(plan, view, facts, settings);
       if (['in-review', 'in-progress'].includes(plan.state)) checkMergeClass(plan, view, facts, settings);
       return undefined;
     case 'in-progress':
@@ -498,4 +536,4 @@ function decideAll(views, ctx) {
   return staged.map((s) => s.plan);
 }
 
-module.exports = { decideIssue, decideAll, decideState, readFacts, toNeedsAnswer, ROLE_FOR_STATE, SESSION_RETRIES };
+module.exports = { decideIssue, decideAll, decideState, readFacts, toNeedsAnswer, reviewRound, ROLE_FOR_STATE, SESSION_RETRIES };

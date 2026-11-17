@@ -41,6 +41,9 @@ function focusIssues(name, event) {
     }
     case 'schedule':
       return 'all';
+    // D90: the run names the pull request, not the issue; a full reconcile finds it.
+    case 'workflow_run':
+      return 'all';
     default:
       return [];
   }

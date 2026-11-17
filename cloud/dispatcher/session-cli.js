@@ -10,14 +10,14 @@ const path = require('path');
 const { createClient } = require('./github/client');
 const { loadIssueView, listIssueIndex } = require('./github/snapshot');
 const { applyPlan } = require('./github/apply');
-const { dispatchWorkflow, DISPATCH_WORKFLOW } = require('./github/actions');
+const { dispatchWorkflow, DISPATCH_WORKFLOW, MERGE_GATE_WORKFLOW } = require('./github/actions');
 const { readFacts, ROLE_FOR_STATE } = require('./decide');
 const { Plan } = require('./decide/plan');
 const L = require('./decide/labels');
-const { taskMessage } = require('./decide/task');
+const { taskMessage, fence } = require('./decide/task');
 const { withSpec, splitBody } = require('./decide/spec');
 const { agentActions, dispatcherOutcome, parseResult, validateResult, scrubSecrets } = require('./decide/outcome');
-const { branchName, pullBody, pullToReuse, mergeLabelOf } = require('./decide/merge');
+const { branchName, pullBody, pullToReuse, mergeLabelOf, mergeClassCheck } = require('./decide/merge');
 const { parseDefinition } = require('./platform/sync');
 const { createPlatformClient } = require('./platform/client');
 const { installationToken } = require('./platform/app-token');
@@ -69,6 +69,43 @@ function branchSection(branch, exists, defaultBranch) {
       ? `Your branch ${b} exists and is mounted: continue it. If ${d} moved on, merge it in and resolve the conflicts first. Push only to ${b}.`
       : `The branch ${b} doesn't exist yet, so ${d} is mounted. Create ${b} from it and push only to ${b}.`,
   };
+}
+
+// CW-68: an implementation the review or CI sent back. The review's findings are in its
+// newest comment on the issue.
+function reviewRoundSection(record, settings) {
+  const round = Number(record.reviewRounds || 0);
+  if (!round) return null;
+  return {
+    title: 'Review round',
+    text: `This is review round ${round} of ${settings.reviewRounds}. The newest review comment on this issue lists each item and its result, or \`ci\` failed at your last push. Fix every failed item, or say in the pull request body why it stands. Push to the same branch and report \`pushed\` again.`,
+  };
+}
+
+// CW-60, CW-61: the review agent sees the pull request's head commit, its merge class and
+// what the changed files allow (CW-62).
+// The title and the reasons (taken from file paths) come from GitHub: fenced, as data (CW-92).
+function pullSection(pull, check) {
+  const lines = [
+    `Review #${pull.number} at head commit ${pull.headSha}, branch \`${pull.headRef}\`, which is mounted. Your verdict is for this head commit only: a later push gets a new review.`,
+    `Its merge class is \`${check.effective}\`. The lowest class the changed files allow is \`${check.computed}\`.`,
+    '',
+    'Its title, from GitHub:',
+    '',
+    fence(pull.title),
+  ];
+  if (check.reasons.length) lines.push('', `What in the changed files raises the class, from their paths:`, '', fence(check.reasons.join('\n')));
+  else lines.push('', 'Nothing in the changed files raises the class.');
+  return { title: 'Pull request', text: lines.join('\n') };
+}
+
+// The pull request changed while the review ran: its verdict is about an older commit.
+// Without one at the start no session ran, and the failure is reported as such.
+function pullChanged(before, after) {
+  const a = before.pull;
+  const b = after.pull;
+  if (!a) return false;
+  return !b || a.number !== b.number || a.headSha !== b.headSha || b.state !== 'open';
 }
 
 // CW-51, CW-55: opens the issue's one pull request, or updates it; one closed without
@@ -127,6 +164,14 @@ async function runForIssue({ issue, role, settings, gh, agentClient, platform, m
       const exists = Boolean(await branchHead(gh, branch));
       if (exists) mount = branch;
       sections.push(branchSection(branch, exists, defaultBranch));
+      const round = reviewRoundSection(facts.record, settings);
+      if (round) sections.push(round);
+    }
+    if (role === 'review') {
+      const pull = before.pull;
+      if (!pull || pull.state !== 'open' || !pull.headRef) throw new Error('the issue has no open pull request to review');
+      mount = pull.headRef;
+      sections.push(pullSection(pull, mergeClassCheck(view.labels, pull, settings)));
     }
     const message = taskMessage({ role, view, record: facts.record, settings, limitUsd, issues, branch: mount, sections });
     session = await runSession({ client: platform, role, environmentName, settings, limitUsd, message, branch: mount, mintToken: mint, metadata: { issue: String(issue), role }, now, sleep, log });
@@ -140,7 +185,7 @@ async function runForIssue({ issue, role, settings, gh, agentClient, platform, m
 
   view = await loadIssueView(gh, issue);
   facts = readFacts(view, settings);
-  const stale = Boolean(skipReason(view, facts.record, role)) || bodyChanged(before, view);
+  const stale = Boolean(skipReason(view, facts.record, role)) || bodyChanged(before, view) || (role === 'review' && pullChanged(before, view));
   const parsed = parseResult(session.text);
   const created = [];
   if (!stale && publishable(session) && parsed.ok && validateResult(role, parsed.result, issue, settings).ok) {
@@ -183,13 +228,20 @@ async function runForIssue({ issue, role, settings, gh, agentClient, platform, m
       }
     }
     // An approval request without its spec would ask for approval of nothing.
-    if (actions.comment && !specFailed) await agent.request('POST', `/repos/${agent.repo}/issues/${issue}/comments`, { body: actions.comment });
+    if (actions.comment && !specFailed) {
+      await agent.request('POST', `/repos/${agent.repo}/issues/${issue}/comments`, { body: actions.comment });
+      created.push({ kind: 'comment' });
+    }
   }
-  const { plan } = dispatcherOutcome({ role, view, record: facts.record, session, text: session.text, created, settings, stale });
+  const reviewed = role === 'review' && before.pull ? { number: before.pull.number, headSha: before.pull.headSha } : null;
+  const { plan } = dispatcherOutcome({ role, view, record: facts.record, session, text: session.text, created, settings, stale, pull: reviewed });
   plan.remember({ session: null });
   await applyPlan(gh, plan, 'live');
   // Label changes by GITHUB_TOKEN start no run, so the next step is asked for here.
   await dispatchWorkflow(gh, DISPATCH_WORKFLOW, defaultBranch, { issue });
+  // CW-64: merge-gate reads the approval just recorded; its run then starts the merge job.
+  const review = plan.record.review;
+  if (review && review.verdict === 'approved') await dispatchWorkflow(gh, MERGE_GATE_WORKFLOW, defaultBranch, { pr: String(review.pull) });
   return session.phase;
 }
 
@@ -230,4 +282,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { runForIssue, skipReason, bodyChanged, publishable, liveEnvProblems, branchSection, publishPull, main };
+module.exports = { runForIssue, skipReason, bodyChanged, pullChanged, publishable, liveEnvProblems, branchSection, reviewRoundSection, pullSection, publishPull, main };
