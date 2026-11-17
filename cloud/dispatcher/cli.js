@@ -8,13 +8,14 @@
 const fs = require('fs');
 const path = require('path');
 const { createClient } = require('./github/client');
-const { loadIssueView, listOpenIssues, listClosedSince } = require('./github/snapshot');
+const { loadIssueView, listOpenIssues, listClosedSince, listCommentsSince } = require('./github/snapshot');
 const { applyPlan, dryRunComment } = require('./github/apply');
 const { decideAll, readFacts } = require('./decide');
 const { activeSessionIssues, dispatchWorkflow, SESSION_WORKFLOW, MERGE_GATE_WORKFLOW } = require('./github/actions');
 const { closingIssues } = require('./decide/spec');
 const L = require('./decide/labels');
 const { settingsProblems } = require('./decide/settings');
+const { monthStart, monthSpend, monthStatus } = require('./decide/spend');
 
 const SETTINGS = path.join(__dirname, '..', 'settings.json');
 
@@ -87,6 +88,18 @@ function runningSessions(views, activeIssues, settings, now = Date.now()) {
   }).map((v) => v.number));
 }
 
+// CW-83: what running sessions may still spend: the hard limit each was started with.
+// `views` are the issues this run decides; `others` holds the views of issues outside
+// them that have a session run active.
+function reservedUsd(views, running, others, settings) {
+  let usd = 0;
+  for (const v of [...views.filter((x) => running.has(x.number)), ...others]) {
+    const session = readFacts(v, settings).record.session;
+    if (session && Number.isFinite(Number(session.limitUsd))) usd += Number(session.limitUsd);
+  }
+  return Math.round(usd * 100) / 100;
+}
+
 function loadSettings(file = SETTINGS) {
   if (!fs.existsSync(file)) throw new Error('cloud/settings.json is missing');
   const settings = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -116,8 +129,19 @@ async function main() {
 
   const views = [];
   for (const n of numbers) views.push(await loadIssueView(client, n));
-  const running = live ? runningSessions(views, await activeSessionIssues(client), settings) : new Set();
-  const ctx = { settings, control: { stopped: env.CLOUD_STOPPED === 'true' }, running, activeElsewhere };
+  const active = live ? await activeSessionIssues(client) : new Set();
+  const running = live ? runningSessions(views, active, settings) : new Set();
+  const others = [];
+  for (const n of active) if (!numbers.includes(n)) others.push(await loadIssueView(client, n));
+  // CW-83, CW-85: the month's spend from the session costs recorded on issues.
+  const { monthUsd } = monthSpend(await listCommentsSince(client, monthStart()), settings);
+  const spend = { monthUsd, reservedUsd: reservedUsd(views, running, others, settings) };
+  const month = monthStatus(monthUsd, settings);
+  console.log(`Month so far: $${monthUsd.toFixed(2)} of $${month.capUsd.toFixed(2)}; running sessions may still spend $${spend.reservedUsd.toFixed(2)}.`);
+  // CW-86: the status issue says so from phase 9 on; until then the run's log does.
+  if (month.reached) console.log(`::warning::The monthly cap of $${month.capUsd.toFixed(2)} is reached: no session starts until the turn of the month or a raised cap.`);
+  else if (month.warning) console.log(`::warning::The month's spend has passed the warning level of ${Math.round(settings.warningLevel * 100)}% of the cap.`);
+  const ctx = { settings, control: { stopped: env.CLOUD_STOPPED === 'true' }, running, activeElsewhere, spend };
 
   for (const plan of decideAll(views, ctx)) {
     if (live && plan.start) plan.remember({ session: { role: plan.start.role, limitUsd: plan.start.limitUsd, at: new Date().toISOString() } });
@@ -139,4 +163,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { focusIssues, reconcileTargets, loadSettings, liveSetupMissing, runningSessions };
+module.exports = { reservedUsd, focusIssues, reconcileTargets, loadSettings, liveSetupMissing, runningSessions };

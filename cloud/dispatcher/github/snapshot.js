@@ -186,4 +186,10 @@ async function listIssueIndex(client, max = 500) {
   return all.map(mapIssue).filter((i) => !i.isPull).slice(0, max).map(({ number, title, state }) => ({ number, title, state }));
 }
 
-module.exports = { mapTimeline, referencingPulls, mapIssue, mapPull, mapFiles, mapCi, loadPullFiles, loadIssueView, listOpenIssues, listClosedSince, listIssueIndex };
+// CW-83: the repository's issue comments updated since `since` (ISO time). GitHub filters
+// on the update time; the month ledger checks the creation time itself.
+function listCommentsSince(client, since) {
+  return client.paginate(`/repos/${client.repo}/issues/comments?since=${encodeURIComponent(since)}`);
+}
+
+module.exports = { listCommentsSince, mapTimeline, referencingPulls, mapIssue, mapPull, mapFiles, mapCi, loadPullFiles, loadIssueView, listOpenIssues, listClosedSince, listIssueIndex };

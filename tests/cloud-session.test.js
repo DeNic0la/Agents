@@ -303,7 +303,7 @@ test('CW-102: a stale result applies nothing but the cost', () => {
   assert.deepEqual(plan.add, []);
   assert.deepEqual(plan.remove, []);
   assert.equal(plan.close, null);
-  assert.deepEqual(plan.record, { totalUsd: 1.5 });
+  assert.deepEqual(plan.record, { totalUsd: 1.5, sessionCostUsd: 0.5 });
   assert.match(said(plan), /result is not applied/);
   assert.equal(result.outcome, 'routed');
 });

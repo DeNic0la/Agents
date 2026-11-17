@@ -35,4 +35,34 @@ function dispatchWorkflow(client, workflow, ref, inputs) {
   return client.request('POST', `/repos/${client.repo}/actions/workflows/${workflow}/dispatches`, body);
 }
 
-module.exports = { activeSessionIssues, dispatchWorkflow, parseRunName, runName, SESSION_WORKFLOW, DISPATCH_WORKFLOW, MERGE_GATE_WORKFLOW, MERGE_WORKFLOW };
+// CW-84: the workflows the stop switch turns off. merge-gate stays on: it is a required
+// check and only reports; without dispatch, session and merge nothing it reports acts.
+const STOPPABLE_WORKFLOWS = [DISPATCH_WORKFLOW, SESSION_WORKFLOW, MERGE_WORKFLOW];
+
+function setWorkflowEnabled(client, workflow, enabled) {
+  return client.request('PUT', `/repos/${client.repo}/actions/workflows/${workflow}/${enabled ? 'enable' : 'disable'}`);
+}
+
+// Runs of a workflow that are queued or running: [{ id, name }].
+async function activeRuns(client, workflow) {
+  const runs = new Map();
+  for (const status of ACTIVE_STATUSES) {
+    const data = await client.request('GET', `/repos/${client.repo}/actions/workflows/${workflow}/runs?status=${status}&per_page=100`);
+    for (const run of (data && data.workflow_runs) || []) runs.set(run.id, { id: run.id, name: run.display_title || run.name });
+  }
+  return [...runs.values()];
+}
+
+function cancelRun(client, id) {
+  return client.request('POST', `/repos/${client.repo}/actions/runs/${id}/cancel`);
+}
+
+async function runStatus(client, id) {
+  const run = await client.request('GET', `/repos/${client.repo}/actions/runs/${id}`);
+  return run && run.status;
+}
+
+module.exports = {
+  activeSessionIssues, dispatchWorkflow, parseRunName, runName, setWorkflowEnabled, activeRuns, cancelRun, runStatus,
+  SESSION_WORKFLOW, DISPATCH_WORKFLOW, MERGE_GATE_WORKFLOW, MERGE_WORKFLOW, STOPPABLE_WORKFLOWS,
+};

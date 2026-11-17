@@ -12,6 +12,7 @@ const { higher } = require('./merge-class');
 const { fence } = require('./task');
 const { SPEC_START, SPEC_END } = require('./spec');
 const { pullBody } = require('./merge');
+const { issueCap, costRecord } = require('./spend');
 
 // Outcomes each role may report. `questions` and `objection` are shared.
 const OUTCOMES = {
@@ -183,8 +184,9 @@ function raiseMerge(plan, to, reason) {
   plan.say.push(`Raised the merge class to ${code(next)}: ${reason}`);
 }
 
-function capOf(route, settings) {
-  return settings.caps.perIssueUsd[route];
+// CW-82: the cap counts the extensions the owner gave.
+function capOf(route, settings, record) {
+  return issueCap(route, record, settings);
 }
 
 const TRIAGE = {
@@ -226,7 +228,7 @@ const TRIAGE = {
     plan.say.push(`Triage: ${code(route)}, ${code(mergeLabel(plan.labels))}, estimate ${usd(r.estimateUsd)}.`);
     if (name === 'direct') plan.say.push(`Acceptance check: ${r.acceptanceCheck.trim()}`);
     const next = name === 'direct' ? 'ready' : 'refining';
-    const cap = capOf(name, ctx.settings);
+    const cap = capOf(name, ctx.settings, ctx.record);
     if (r.estimateUsd > cap && !plan.has(L.BUDGET_EXTEND)) {
       return toNeedsAnswer(plan, next, `the estimate of ${usd(r.estimateUsd)} is above the ${name} cap of ${usd(cap)}; add \`budget:extend\` or narrow the request`, 'Routed, but over the cap.');
     }
@@ -248,7 +250,7 @@ const REFINE = {
     const route = routeLabel(plan.labels);
     const merge = mergeLabel(plan.labels);
     plan.say.push(`The spec is in this issue's marked section: route ${route ? code(route) : '(none)'}, merge class ${merge ? code(merge) : '(none)'}, estimate ${usd(r.estimateUsd)}. Add \`approved\` to build it as it stands now, or comment to have it revised (CW-34).`);
-    const cap = route ? capOf(L.routeOf(route), ctx.settings) : undefined;
+    const cap = route ? capOf(L.routeOf(route), ctx.settings, ctx.record) : undefined;
     if (Number.isFinite(cap) && r.estimateUsd > cap && !plan.has(L.BUDGET_EXTEND)) {
       plan.say.push(`The estimate is above the ${L.routeOf(route)} cap of ${usd(cap)}, so it starts only with \`budget:extend\` as well (Definition of Ready, item 7).`);
     }
@@ -359,9 +361,10 @@ function dispatcherOutcome({ role, view, record = {}, session, text, created = [
   const plan = new Plan(view.number, view.labels);
   const state = plan.state;
   const cost = round(Number(session.costUsd || 0));
-  // CW-81: triage runs on its own per-run cap; the issue's cap counts from refinement on.
-  const spentUsd = role === 'triage' ? Number(record.spentUsd || 0) : round(Number(record.spentUsd || 0) + cost);
-  plan.remember({ totalUsd: round(Number(record.totalUsd || 0) + cost), ...(role === 'triage' ? {} : { spentUsd }) });
+  // CW-81, CW-85: the issue's cost and the month ledger's entry, on every path below.
+  const entry = costRecord(record, role, cost);
+  const spentUsd = entry.spentUsd ?? Number(record.spentUsd || 0);
+  plan.remember(entry);
   const ctx = { role, state, record, created, settings, spentUsd, pull };
 
   const parsed = parseResult(text);

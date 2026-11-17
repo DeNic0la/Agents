@@ -12,7 +12,8 @@
 // The context:
 //   { settings, control: { stopped }, running: Set of issue numbers with a session,
 //     queue: issue numbers that may start implementing now (ready.startableQueue),
-//     spend: { monthUsd } when known }
+//     spend: { monthUsd, reservedUsd } when known: the month's spend and the hard limits of
+//     running sessions (CW-83) }
 'use strict';
 
 const L = require('./labels');
@@ -21,6 +22,7 @@ const { readRecord } = require('./markers');
 const { splitBody, digest } = require('./spec');
 const { checkReady, routeLabel, startableQueue } = require('./ready');
 const { unsetCaps } = require('./settings');
+const { issueCap } = require('./spend');
 const { Plan } = require('./plan');
 const { mergeClassCheck, mergeLabelOf, closingComment } = require('./merge');
 
@@ -416,8 +418,9 @@ function handleState(plan, view, facts, settings) {
 
 const roundCents = (usd) => Math.floor(usd * 100) / 100;
 
-// CW-81: the hard limit of a session. Spent amounts and extensions come from records
-// the session-watching job writes (phase 3 and 8).
+// CW-81, CW-83: the hard limit of a session: what's left of the issue's cap (with its
+// extensions) or the per-run cap, bounded by what's left of the month less what running
+// sessions may still spend. Spent amounts come from the session job's records.
 function hardLimit(role, plan, record, ctx) {
   const caps = ctx.settings.caps;
   let limit;
@@ -425,12 +428,32 @@ function hardLimit(role, plan, record, ctx) {
   else {
     const route = routeLabel(plan.labels);
     if (!route) return null;
-    limit = caps.perIssueUsd[L.routeOf(route)] * (1 + Number(record.extensions || 0)) - Number(record.spentUsd || 0);
+    limit = issueCap(L.routeOf(route), record, ctx.settings) - Number(record.spentUsd || 0);
   }
-  if (ctx.spend && Number.isFinite(ctx.spend.monthUsd)) {
-    limit = Math.min(limit, caps.monthlyUsd - ctx.spend.monthUsd - Number(ctx.spend.reservedUsd || 0));
-  }
+  const left = monthLeft(ctx);
+  if (left !== null) limit = Math.min(limit, left);
   return roundCents(limit);
+}
+
+// What the month still allows a new session, or null when the month's spend is unknown.
+function monthLeft(ctx) {
+  const spend = ctx.spend;
+  if (!spend || !Number.isFinite(spend.monthUsd)) return null;
+  return ctx.settings.caps.monthlyUsd - spend.monthUsd - Number(spend.reservedUsd || 0);
+}
+
+// CW-82: `budget:extend` allows one more cap. It is used when an agent starts with it:
+// the extension is recorded, the label and `paused` are removed.
+function useExtension(plan, record, settings) {
+  const extensions = Number(record.extensions || 0) + 1;
+  plan.remember({ extensions });
+  plan.removeLabel(L.BUDGET_EXTEND);
+  const unpaused = plan.has(L.PAUSED);
+  plan.removeLabel(L.PAUSED);
+  const route = routeLabel(plan.labels);
+  const cap = route ? issueCap(L.routeOf(route), { extensions }, settings) : NaN;
+  const total = Number.isFinite(cap) ? ` of $${cap.toFixed(2)} in all` : '';
+  plan.say.push(`Used \`budget:extend\`${unpaused ? ' and removed \`paused\`' : ''}: this issue may now spend ${extensions + 1} caps${total} (CW-82).`);
 }
 
 const SESSION_RETRIES = 1; // CW-16: one retry, then the owner
@@ -471,11 +494,19 @@ function startAgent(plan, view, facts, ctx) {
   }
   if (ctx.running && ctx.running.has(view.number)) return plan.notes.push('a session is already running for this issue');
   if (ctx.control && ctx.control.stopped) return plan.notes.push('the stop switch is on');
-  if (plan.has(L.PAUSED)) return plan.notes.push('the issue is `paused` at its cap');
+  // Triage runs on its per-run cap, so an extension waits for the agent that uses the issue's.
+  const extend = role !== 'triage' && plan.has(L.BUDGET_EXTEND);
+  if (plan.has(L.PAUSED) && !extend) return plan.notes.push('the issue is `paused` at its cap; `budget:extend` continues it');
   const unset = unsetCaps(ctx.settings);
   if (unset.length) return plan.notes.push(`no session starts while caps are unset: ${unset.join(', ')}`);
-  const limitUsd = hardLimit(role, plan, { ...facts.record, ...plan.record }, ctx);
+  const record = { ...facts.record, ...plan.record };
+  const left = monthLeft(ctx);
+  // CW-83: at the monthly cap nothing starts; labels stay, and the next run after the turn
+  // of the month or a raised cap starts it.
+  if (left !== null && !(roundCents(left) > 0)) return plan.notes.push(`the monthly cap of $${Number(ctx.settings.caps.monthlyUsd).toFixed(2)} is reached`);
+  const limitUsd = hardLimit(role, plan, extend ? { ...record, extensions: Number(record.extensions || 0) + 1 } : record, ctx);
   if (!(limitUsd > 0)) return plan.notes.push('nothing is left of the cap for this session');
+  if (extend) useExtension(plan, record, ctx.settings);
   // The dispatcher requested a session and no run of it is active any more: the run ended
   // without reporting (a crash or a time-out of the job). CW-16 counts it as a failure.
   const lost = facts.record.session;
@@ -559,7 +590,13 @@ function decideAll(views, ctx) {
     .filter((s) => s.plan.state === 'ready')
     .map((s) => ({ number: s.view.number, labels: [...s.plan.labels], record: { ...s.facts.record, ...s.plan.record }, dependencies: s.view.dependencies }));
   const queue = startableQueue(candidates, active, ctx.settings);
-  for (const s of live) startAgent(s.plan, s.view, s.facts, { ...ctx, queue });
+  // CW-83: each session started here reserves its hard limit from what's left of the month,
+  // so the sessions of one run never pass the cap together (lowest issue number first).
+  const spend = ctx.spend ? { ...ctx.spend, reservedUsd: Number(ctx.spend.reservedUsd || 0) } : undefined;
+  for (const s of live) {
+    startAgent(s.plan, s.view, s.facts, { ...ctx, spend, queue });
+    if (spend && s.plan.start) spend.reservedUsd += s.plan.start.limitUsd;
+  }
   return staged.map((s) => s.plan);
 }
 
