@@ -93,8 +93,33 @@ test('CW-63: the merge waits for every condition', () => {
   assert.match(why({ checkRuns: [] }), /no `ci` check/);
   assert.match(why({ checkRuns: [{ id: 1, name: 'ci', status: 'in_progress', conclusion: null }] }), /still running/);
   assert.match(why({ checkRuns: [{ id: 1, name: 'ci', status: 'completed', conclusion: 'failure' }] }), /ended with failure/);
-  assert.match(why({ statuses: [{ context: 'merge-gate', state: 'success' }] }), /`owner-merge` status at the head commit is missing/);
-  assert.match(why({ statuses: [{ context: 'merge-gate', state: 'pending' }, { context: 'owner-merge', state: 'success' }] }), /`merge-gate` status .* is pending/);
+});
+
+test('D85: a gate that passes without its statuses at the head commit is run again', () => {
+  const regate = (statuses) => {
+    const v = verdict({ statuses });
+    assert.equal(v.action, 'regate');
+    return v.why;
+  };
+  assert.match(regate([{ context: 'merge-gate', state: 'success' }]), /`owner-merge` status at the head commit is missing/);
+  assert.match(regate([{ context: 'merge-gate', state: 'pending' }, { context: 'owner-merge', state: 'success' }]), /`merge-gate` status .* is pending/);
+});
+
+test('D85: merge:human on the pull request keeps it from the agent, whatever the issue says', () => {
+  assert.equal(verdict({ pr: pr({ labels: ['merge:human'] }) }).action, 'skip');
+});
+
+test('D85: closing references by repository or URL are refused or name no single issue', () => {
+  const { qualifiedClosing, closingIssues } = req('decide/spec.js');
+  const { issueNumberOf } = req('decide/merge-gate.js');
+  const body = 'Done.\n\nFixes https://github.com/o/r/issues/8';
+  assert.deepEqual(qualifiedClosing(body), ['https://github.com/o/r/issues/8']);
+  assert.deepEqual(qualifiedClosing('Closes o/r#8 and resolves: #7'), ['o/r#8']);
+  assert.deepEqual(closingIssues('Closes o/r#8 and resolves: #7'), [7]);
+  assert.equal(pullBody(body, 7, 'merge:self').ok, false);
+  assert.match(pullBody('Closes o/r#8', 7, 'merge:self').error, /o\/r#8/);
+  assert.equal(issueNumberOf({ body: `${body}\n\nCloses #7` }), null);
+  assert.equal(issueNumberOf({ body: 'Closes #7' }), 7);
 });
 
 test('D75: the newest ci run counts, and other checks are ignored', () => {
@@ -122,7 +147,7 @@ test('CW-69: the closing comment names who merged, the cost and the issues filed
 
 // ---- the merge job ---------------------------------------------------------------------
 
-function fakeRepo({ pulls, issueLabels = ['in-review', 'merge:self'], record = { mergeCheck: { sha: 'sha1', merge: 'merge:self' }, totalUsd: 2 }, mergeFails = false } = {}) {
+function fakeRepo({ pulls, issueLabels = ['in-review', 'merge:self'], record = { mergeCheck: { sha: 'sha1', merge: 'merge:self' }, totalUsd: 2 }, mergeFails = false, commentFails = false, statuses = green.statuses } = {}) {
   const writes = [];
   const list = pulls || [{ number: 9, title: 'Add --dry-run', user: { login: 'agents[bot]' }, draft: false, head: { sha: 'sha1' }, body: 'Done.\n\nCloses #7', mergeable: true, mergeable_state: 'clean' }];
   const gh = {
@@ -133,7 +158,7 @@ function fakeRepo({ pulls, issueLabels = ['in-review', 'merge:self'], record = {
         if (pull) return list.find((x) => x.number === Number(pull[1]));
         if (p === '/repos/o/r/issues/7') return { number: 7, state: 'open', labels: issueLabels.map((name) => ({ name })) };
         if (p.endsWith('/check-runs?per_page=100')) return { check_runs: green.checkRuns };
-        if (p.endsWith('/status')) return { statuses: green.statuses };
+        if (p.endsWith('/status')) return { statuses };
         throw Object.assign(new Error(`unexpected GET ${p}`), { status: 404 });
       }
       writes.push({ who: 'gh', method, path: p, body });
@@ -150,6 +175,7 @@ function fakeRepo({ pulls, issueLabels = ['in-review', 'merge:self'], record = {
     request: async (method, p, body) => {
       writes.push({ who: 'agent', method, path: p, body });
       if (method === 'PUT' && mergeFails) throw new Error('Head branch was modified');
+      if (method === 'POST' && commentFails) throw new Error('Bad gateway');
       return method === 'PUT' ? { sha: 'merge123456', merged: true } : {};
     },
   };
@@ -171,10 +197,27 @@ test('CW-63, CW-69, D77: the agent merges at the checked commit, the dispatcher 
   const recorded = writes.find((w) => w.who === 'gh' && w.path.endsWith('/issues/7/comments'));
   assert.match(recorded.body.body, /The agent merged #9 \(`merge:self`\) at merge12/);
   const { record } = readRecord([{ type: 'commented', actor: 'github-actions[bot]', body: recorded.body.body }], settings);
-  assert.deepEqual(record.merged, { pull: 9, sha: 'merge123456', by: 'agent', at: '2026-11-17T10:00:00.000Z' });
+  assert.deepEqual(record.merged, { pull: 9, sha: 'merge123456', by: 'agent', at: '2026-11-17T10:00:00.000Z', commented: true });
   const closing = writes.find((w) => w.who === 'agent' && w.method === 'POST');
   assert.equal(closing.path, '/repos/o/r/issues/7/comments');
   assert.match(closing.body.body, /as the agent[\s\S]*\$2\.00/);
+});
+
+test('D86: a closing comment that fails is recorded as owed', async () => {
+  const { deps, writes } = fakeRepo({ commentFails: true });
+  assert.equal((await runMerge(deps))[0].action, 'merge');
+  const recorded = writes.find((w) => w.who === 'gh' && w.path.endsWith('/issues/7/comments'));
+  const { record } = readRecord([{ type: 'commented', actor: 'github-actions[bot]', body: recorded.body.body }], settings);
+  assert.equal(record.merged.commented, false);
+});
+
+test('D85: a missing gate status makes the job run merge-gate again', async () => {
+  const { deps, writes, mints } = fakeRepo({ statuses: [{ context: 'merge-gate', state: 'success' }] });
+  assert.equal((await runMerge(deps))[0].action, 'regate');
+  const dispatch = writes.find((w) => w.path.includes('/actions/workflows/'));
+  assert.match(dispatch.path, /merge-gate\.yml\/dispatches$/);
+  assert.equal(dispatch.body.inputs.pr, '9');
+  assert.equal(mints.length, 0);
 });
 
 test('D83: a dry run only reports', async () => {

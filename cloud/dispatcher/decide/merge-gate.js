@@ -14,7 +14,7 @@
 'use strict';
 
 const { actorKind } = require('./actors');
-const { closingIssues } = require('./spec');
+const { closingIssues, qualifiedClosing } = require('./spec');
 
 const MAX_DESCRIPTION = 140;
 const AGENT_CLASSES = ['merge:self', 'merge:agent'];
@@ -29,17 +29,20 @@ const classOf = (labels) => CLASSES.find((c) => (labels || []).includes(c)) || n
 
 // The one issue an agent pull request is for (one branch and pull request per issue, CW-50).
 function issueNumberOf(pr) {
+  if (qualifiedClosing(pr.body).length) return null;
   const numbers = closingIssues(pr.body);
   return numbers.length === 1 ? numbers[0] : null;
 }
 
-// `pr`: { author, headSha, body }; `issue`: { number, state, labels, record } or null.
+// `pr`: { author, headSha, body, labels }; `merge:human` on the pull request itself is the
+// owner's override (docs/development-workflow.md, merge classes; D85). `issue`: { number, state, labels, record } or null.
 function judgePull({ pr, issue, settings }) {
   const ownerDecides = (why) => ({
     'merge-gate': result('success', `${why}: owner-merge decides`),
     'owner-merge': result('pending', `${why}: only the owner merges it`),
   });
   if (actorKind(pr.author, settings) !== 'agent') return ownerDecides('Not opened by the agent');
+  if ((pr.labels || []).includes('merge:human')) return ownerDecides('The pull request is merge:human');
   if (!issue) return ownerDecides('Names no single issue it closes');
   if (issue.state !== 'open') return ownerDecides(`Issue #${issue.number} is not open`);
   const cls = classOf(issue.labels);

@@ -5,7 +5,7 @@
 
 const L = require('./labels');
 const { actorKind } = require('./actors');
-const { closingIssues } = require('./spec');
+const { closingIssues, qualifiedClosing } = require('./spec');
 const { lowestMergeClass, higher } = require('./merge-class');
 const { judgePull, classOf, CONTEXTS } = require('./merge-gate');
 
@@ -24,6 +24,8 @@ const mergeLabelOf = (labels) => classOf([...(labels || [])]);
 function pullBody(body, number, mergeClass) {
   const text = String(body || '').trim();
   const closes = closingIssues(text);
+  const qualified = qualifiedClosing(text);
+  if (qualified.length) return { ok: false, error: `the pull request body closes ${qualified.join(', ')}; name the issue only as #${number}` };
   if (closes.some((n) => n !== number)) return { ok: false, error: `the pull request body closes ${closes.filter((n) => n !== number).map((n) => `#${n}`).join(', ')}; it may close only #${number}` };
   const lines = [text];
   if (mergeClass && !/^Merge class: merge:(self|agent|human)\s*$/m.test(text)) lines.push(`Merge class: ${mergeClass}`);
@@ -52,7 +54,7 @@ function mergeClassCheck(labels, pull, settings) {
 // headSha, body, mergeable, mergeableState }; `issue`: { number, state, labels, record }
 // or null; `checkRuns`: [{ id, name, status, conclusion }] at the head; `statuses`: the
 // combined status's [{ context, state }]. Actions: merge, conflict (back to the implement
-// agent), wait (with `why`), or skip (not the agent's to merge). A branch behind the default
+// agent), regate (run merge-gate again), wait (with `why`), or skip (not the agent's to merge). A branch behind the default
 // branch still merges: the rulesets don't require it up to date (D74).
 const REQUIRED_CHECK = 'ci';
 function mergeVerdict({ pr, issue, checkRuns = [], statuses = [], settings, stopped = false }) {
@@ -63,6 +65,7 @@ function mergeVerdict({ pr, issue, checkRuns = [], statuses = [], settings, stop
   if (issue.state !== 'open') return skip(`issue #${issue.number} is not open`);
   const cls = mergeLabelOf(issue.labels);
   if (!['merge:self', 'merge:agent'].includes(cls)) return skip(`issue #${issue.number} is ${cls || 'without a merge class'}`);
+  if ((pr.labels || []).includes('merge:human')) return skip('the pull request is merge:human');
   if (stopped) return wait('the stop switch CLOUD_STOPPED is on');
   if (pr.draft) return wait('it is a draft');
   if (!issue.labels.includes('in-review')) return wait(`issue #${issue.number} is not \`in-review\``);
@@ -81,7 +84,9 @@ function mergeVerdict({ pr, issue, checkRuns = [], statuses = [], settings, stop
   // now: the rulesets may not be enforced (owner step 3), so the job checks them itself.
   for (const c of CONTEXTS) {
     const s = statuses.find((x) => x.context === c);
-    if (!s || s.state !== 'success') return wait(`the \`${c}\` status at the head commit is ${s ? s.state : 'missing'}`);
+    // judgePull passes, so a status that isn't success is stale or never arrived (a lost
+    // dispatch, a failed merge-gate run): the job runs the gate again (D85).
+    if (!s || s.state !== 'success') return { action: 'regate', why: `the \`${c}\` status at the head commit is ${s ? s.state : 'missing'}` };
   }
   return { action: 'merge', mergeClass: cls };
 }

@@ -255,6 +255,11 @@ test('CW-69: after the owner merged, the dispatcher posts the closing comment on
   assert.equal(decide(closedView({ merged: { pull: 9, by: 'owner' } })).say.length, 0);
   // The agent's merge job posts its own closing comment.
   assert.equal(decide(closedView({}, AGENT)).say.length, 0);
+  // D86: unless it couldn't; then the dispatcher posts it, once.
+  const owed = decide(closedView({ merged: { pull: 9, by: 'agent', commented: false } }, AGENT));
+  assert.match(owed.say.join('\n'), /Merged #9 \(Add --dry-run\) as the agent/);
+  assert.equal(owed.record.merged.commented, true);
+  assert.equal(decide(closedView({ merged: { pull: 9, by: 'agent', commented: true } }, AGENT)).say.length, 0);
 });
 
 test('CW-62: the snapshot maps a pull request with its files and their executable bit', () => {
@@ -262,8 +267,14 @@ test('CW-62: the snapshot maps a pull request with its files and their executabl
   const files = mapFiles(
     [{ filename: 'a.sh', status: 'added', additions: 2, deletions: 0 }, { filename: 'b.md', previous_filename: 'old.md', status: 'renamed', additions: 1, deletions: 1 }, { filename: 'c.md', status: 'removed' }],
     { tree: [{ path: 'a.sh', mode: '100755' }, { path: 'b.md', mode: '100644' }] },
+    { tree: [{ path: 'old.md', mode: '100644' }] },
   );
   assert.deepEqual(files.map((f) => [f.path, f.previousPath, f.executable]), [['a.sh', null, true], ['b.md', 'old.md', false], ['c.md', null, undefined]]);
+  // D85: deleting an executable, or removing its bit, counts as touching one.
+  const before = { tree: [{ path: 'run', mode: '100755' }, { path: 'tool', mode: '100755' }] };
+  const after = { tree: [{ path: 'tool', mode: '100644' }] };
+  const changed = mapFiles([{ filename: 'run', status: 'removed' }, { filename: 'tool', status: 'modified' }], after, before);
+  assert.deepEqual(changed.map((f) => f.executable), [true, true]);
   const pr = mapPull({ number: 9, title: 'T', user: { login: AGENT }, state: 'open', draft: false, merged: false, merged_by: null, head: { sha: 'abc', ref: 'cloud/issue-1' }, mergeable_state: 'clean' }, { files });
   assert.equal(pr.mergeable, null);
   assert.equal(pr.mergeableState, 'clean');

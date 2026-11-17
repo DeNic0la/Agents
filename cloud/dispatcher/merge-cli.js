@@ -10,7 +10,7 @@
 
 const { createClient } = require('./github/client');
 const { applyPlan } = require('./github/apply');
-const { dispatchWorkflow, DISPATCH_WORKFLOW } = require('./github/actions');
+const { dispatchWorkflow, DISPATCH_WORKFLOW, MERGE_GATE_WORKFLOW } = require('./github/actions');
 const { installationToken } = require('./platform/app-token');
 const { issueNumberOf } = require('./decide/merge-gate');
 const { mergeVerdict, closingComment } = require('./decide/merge');
@@ -26,6 +26,7 @@ const mapPr = (p) => ({
   draft: Boolean(p.draft),
   headSha: p.head && p.head.sha,
   body: p.body || '',
+  labels: (p.labels || []).map((l) => (typeof l === 'string' ? l : l.name)),
   mergeable: p.mergeable === undefined ? null : p.mergeable,
   mergeableState: p.mergeable_state || null,
 });
@@ -61,6 +62,10 @@ async function runMerge({ gh, agentClient, mint, settings, live, stopped = false
       await dispatchWorkflow(gh, DISPATCH_WORKFLOW, defaultBranch, { issue: c.issue.number });
       continue;
     }
+    if (verdict.action === 'regate') {
+      await dispatchWorkflow(gh, MERGE_GATE_WORKFLOW, defaultBranch, { pr: String(p.number) });
+      continue;
+    }
     if (verdict.action !== 'merge') continue;
     if (!agent) agent = await agentClient(await mint());
     let merged;
@@ -73,15 +78,19 @@ async function runMerge({ gh, agentClient, mint, settings, live, stopped = false
       continue;
     }
     const record = c.issue.record || {};
-    const plan = new Plan(c.issue.number, c.issue.labels);
-    plan.say.push(`The agent merged #${p.number} (\`${verdict.mergeClass}\`) at ${String(merged && merged.sha).slice(0, 7)}.`);
-    plan.remember({ merged: { pull: p.number, sha: (merged && merged.sha) || null, by: 'agent', at: now().toISOString() } });
-    await applyPlan(gh, plan, 'live');
+    // D86: the closing comment first; when it fails, the record says so and the dispatcher
+    // posts it on its next run (a merged pull request isn't listed here again).
+    let commented = true;
     try {
       await agent.request('POST', `/repos/${agent.repo}/issues/${c.issue.number}/comments`, { body: closingComment({ pull: p.number, title: c.pr.title, by: 'agent', record }) });
     } catch (err) {
+      commented = false;
       log(`::warning::Could not post the closing comment on #${c.issue.number}: ${err.message}`);
     }
+    const plan = new Plan(c.issue.number, c.issue.labels);
+    plan.say.push(`The agent merged #${p.number} (\`${verdict.mergeClass}\`) at ${String(merged && merged.sha).slice(0, 7)}.`);
+    plan.remember({ merged: { pull: p.number, sha: (merged && merged.sha) || null, by: 'agent', at: now().toISOString(), commented } });
+    await applyPlan(gh, plan, 'live');
   }
   return report;
 }

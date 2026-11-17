@@ -86,25 +86,36 @@ function mapPull(pr, { closedBy = null, files = null } = {}) {
   };
 }
 
-// CW-62: the changed files for the merge class rules. `executable` comes from the file mode
-// at the head commit (100755); a path missing from a truncated tree stays unknown.
-function mapFiles(rawFiles, tree) {
-  const modes = new Map(((tree && tree.tree) || []).map((t) => [t.path, t.mode]));
-  return (rawFiles || []).map((f) => ({
-    path: f.filename,
-    previousPath: f.previous_filename || null,
-    status: f.status,
-    additions: f.additions || 0,
-    deletions: f.deletions || 0,
-    executable: modes.has(f.filename) ? modes.get(f.filename) === '100755' : undefined,
-  }));
+// CW-62: the changed files for the merge class rules. `executable` is true when the file
+// is executable (mode 100755) at the head or at the base commit, so deleting an executable or
+// removing its bit counts too (D85). A path missing from a tree it should be in (a truncated
+// tree) leaves it unknown, unless the other side already says executable.
+function mapFiles(rawFiles, tree, baseTree) {
+  const modesOf = (t) => new Map(((t && t.tree) || []).map((e) => [e.path, e.mode]));
+  const head = modesOf(tree);
+  const base = modesOf(baseTree);
+  return (rawFiles || []).map((f) => {
+    const sides = [];
+    if (f.status !== 'removed') sides.push(head.get(f.filename));
+    if (f.status !== 'added') sides.push(base.get(f.previous_filename || f.filename));
+    const executable = sides.includes('100755') ? true : sides.includes(undefined) ? undefined : false;
+    return {
+      path: f.filename,
+      previousPath: f.previous_filename || null,
+      status: f.status,
+      additions: f.additions || 0,
+      deletions: f.deletions || 0,
+      executable,
+    };
+  });
 }
 
 async function loadPullFiles(client, pr) {
   const r = `/repos/${client.repo}`;
   const raw = await client.paginate(`${r}/pulls/${pr.number}/files`);
   const tree = await optional(client.request('GET', `${r}/git/trees/${pr.head.sha}?recursive=1`), null);
-  return mapFiles(raw, tree);
+  const baseTree = pr.base && pr.base.sha ? await optional(client.request('GET', `${r}/git/trees/${pr.base.sha}?recursive=1`), null) : null;
+  return mapFiles(raw, tree, baseTree);
 }
 
 async function optional(promise, fallback) {

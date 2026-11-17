@@ -134,3 +134,12 @@ test('D50: the review relay holds no permissions and merge-gate never runs on pu
   assert.doesNotMatch(wf('merge-gate.yml'), /^\s+pull_request_review:/m);
   assert.match(wf('merge-gate.yml'), /workflows: \[review-relay\]/);
 });
+
+test('D85: merge:human on the pull request passes it to the owner, whatever the issue says', () => {
+  const iss = { number: 7, state: 'open', labels: ['merge:self', 'in-review'], record: { mergeCheck: { sha: 'abc', merge: 'merge:self' } } };
+  const pr = agentPr({ headSha: 'abc' });
+  assert.equal(judge(pr, iss)['owner-merge'].state, 'success');
+  const human = judge({ ...pr, labels: ['merge:human'] }, iss);
+  assert.equal(human['owner-merge'].state, 'pending');
+  assert.match(human['merge-gate'].description, /pull request is merge:human/);
+});

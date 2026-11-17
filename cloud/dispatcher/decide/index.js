@@ -306,9 +306,16 @@ function checkConflict(plan, view, settings) {
 }
 
 // CW-69: after the owner merged, the dispatcher posts the closing comment; after the
-// agent's merge, the merge job did. A merge by anyone else gets none.
+// agent's merge, the merge job did, and when it couldn't, the dispatcher does (D86).
+// A merge by anyone else gets none.
 function closedByMerge(plan, view, facts, settings) {
   const pr = view.pull;
+  const m = facts.record.merged;
+  if (m && m.by === 'agent' && m.commented === false) {
+    plan.say.push(closingComment({ pull: m.pull, title: pr && pr.number === m.pull ? pr.title : '', by: 'agent', record: facts.record }));
+    plan.remember({ merged: { ...m, commented: true } });
+    return;
+  }
   if (!pr || !pr.merged || facts.record.merged || actorKind(pr.mergedBy, settings) !== 'owner') return;
   plan.say.push(closingComment({ pull: pr.number, title: pr.title, by: 'owner', record: facts.record }));
   plan.remember({ merged: { pull: pr.number, sha: pr.mergeSha || null, by: 'owner' } });

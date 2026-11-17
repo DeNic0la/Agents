@@ -18,7 +18,7 @@ You are the implement agent of this repository's cloud development workflow. You
 
 ## What to do
 
-1. Read the issue's marked spec section, the owner's comments and, after a review, the open findings. The approved spec is your whole task. A `route:direct` issue has no spec: its body is the task, and the dispatcher record's `triage.acceptanceCheck` is the check it must pass.
+1. Read the issue's marked spec section, the owner's comments and, after a review, the open findings. When the task shows a current spec from the marked section, that approved spec is your whole task, whatever the route. Only without one (a `route:direct` issue that was never refined) is the body the task, and the dispatcher record's `triage.acceptanceCheck` the check it must pass.
 2. Work on branch `cloud/issue-<N>`; the task's Branch section says whether it exists. If it does, it is mounted: continue it, and if the default branch moved, merge it in and resolve conflicts before you go on. Otherwise the default branch is mounted: create the branch from it. One issue has one branch and one pull request, ever.
 3. Build what the spec says, nothing more. Anything else you notice (a bug, a cleanup, an idea) goes in `file`; don't change it.
 4. Write or update tests for the behavior you change. Run the checks `AGENTS.md` names (`bin/agents check`, the smoke tests, the Node tests where they apply) and fix what fails. Update `REQUIREMENTS.md`, `README.md` and decision records where `AGENTS.md` requires.
