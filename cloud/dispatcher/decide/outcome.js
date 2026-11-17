@@ -6,7 +6,7 @@
 
 const L = require('./labels');
 const { Plan } = require('./plan');
-const { toNeedsAnswer, SESSION_RETRIES: RETRIES } = require('./index');
+const { toNeedsAnswer, reviewRound, SESSION_RETRIES: RETRIES } = require('./index');
 const { routeLabel } = require('./ready');
 const { higher } = require('./merge-class');
 const { fence } = require('./task');
@@ -62,6 +62,13 @@ const isText = (v, max = MAX_COMMENT) => typeof v === 'string' && v.trim().lengt
 const isUsd = (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0;
 const issueList = (v, min, max) => Array.isArray(v) && v.length >= min && v.length <= max && v.every((i) => i && isText(i.title, 256) && typeof i.body === 'string' && i.body.length <= MAX_COMMENT);
 
+const MAX_ITEMS = 50;
+function itemsError(r) {
+  const ok = Array.isArray(r.items) && r.items.length >= 1 && r.items.length <= MAX_ITEMS
+    && r.items.every((i) => i && isText(i.item, 300) && typeof i.pass === 'boolean' && (i.note === undefined || i.note === null || (typeof i.note === 'string' && i.note.length <= 2000)));
+  return ok ? null : `\`items\` must be 1 to ${MAX_ITEMS} \`{ item, pass, note }\``;
+}
+
 // Extra fields per outcome: a check that returns an error text or null.
 const NEEDS = {
   duplicate: (r, n) => (Number.isInteger(r.of) && r.of > 0 && r.of !== n ? null : '`of` must be the number of another issue'),
@@ -87,9 +94,15 @@ const NEEDS = {
     const checked = pullBody(r.body, n, null); // CW-50: one issue per pull request
     return checked.ok ? null : checked.error;
   },
-  approve: (r) => (Array.isArray(r.items) ? null : '`items` is required'),
-  changes: (r) => (Array.isArray(r.items) ? null : '`items` is required'),
-  recommend: (r) => (typeof r.merge === 'boolean' ? null : '`merge` must be true or false'),
+  // CW-61: the review states its result per item (D88).
+  approve: (r) => itemsError(r) || (r.items.every((i) => i.pass) ? null : '`approve` needs every item to pass; use `changes`'),
+  changes: (r) => itemsError(r) || (r.items.some((i) => !i.pass) ? null : '`changes` needs at least one item that fails'),
+  recommend: (r) => {
+    if (typeof r.merge !== 'boolean') return '`merge` must be true or false';
+    if (!isText(r.explanation, 2000)) return '`explanation` is required (CW-65)';
+    if (r.merge && !isText(r.classReason, 2000)) return '`classReason` is required to recommend merging (CW-65)';
+    return itemsError(r);
+  },
   recommendations: (r, n, s) => (issueList(r.issues || [], 0, Number(s.scout && s.scout.issuesPerRun) || 3) ? null : '`issues` has too many entries or a bad one'),
   recorded: (r) => (isText(r.title, 256) && isText(r.body) ? null : '`title` and `body` are required'),
 };
@@ -120,7 +133,28 @@ function agentActions(role, r, number) {
   if (r.outcome === 'recommendations') issues.push(...(r.issues || []).map((i) => ({ kind: 'recommendation', title: i.title, body: i.body })));
   const spec = r.outcome === 'spec' ? r.spec.trim() : null;
   const pull = r.outcome === 'pushed' ? { title: r.title.trim(), body: r.body } : null;
-  return { spec, pull, comment: typeof r.comment === 'string' && r.comment.trim() ? r.comment : null, issues };
+  const comment = role === 'review' && REVIEW_OUTCOMES.includes(r.outcome) ? reviewComment(r)
+    : typeof r.comment === 'string' && r.comment.trim() ? r.comment : null;
+  return { spec, pull, comment, issues };
+}
+
+// The review comment the agent identity posts on the issue (D88): the verdict, in the
+// workflow document's wording for a recommendation (CW-65), then one row per item (CW-61).
+const REVIEW_OUTCOMES = ['approve', 'changes', 'recommend'];
+const sentence = (s) => String(s).trim().replace(/[.\s]+$/, '');
+const cell = (s) => String(s == null ? '' : s).replace(/\r?\n+/g, ' ').replace(/\|/g, '\\|').trim();
+function reviewComment(r) {
+  const head = {
+    approve: '**Review: approve.** Every item passes.',
+    changes: '**Review: changes requested.** Each failed item below needs a fix, or the pull request body says why not.',
+    recommend: r.merge
+      ? `Recommend merging. Human approval is required because ${sentence(r.classReason || '')}. Recommended because ${sentence(r.explanation || '')}.`
+      : `Recommend not merging, because ${sentence(r.explanation || '')}.`,
+  }[r.outcome];
+  const rows = (r.items || []).map((i) => `| ${cell(i.item)} | ${i.pass ? 'pass' : '**fail**'} | ${cell(i.note)} |`);
+  const parts = [head, ['| Item | Result | Note |', '|---|---|---|', ...rows].join('\n')];
+  if (typeof r.comment === 'string' && r.comment.trim()) parts.push(r.comment.trim());
+  return parts.join('\n\n');
 }
 
 const mergeLabel = (labels) => [...L.MERGES].reverse().find((m) => labels.has(m)) || null;
@@ -229,7 +263,41 @@ const IMPLEMENT = {
     plan.say.push('The implement agent found the spec wrong or incomplete (its comment says why): back to `refining` without `approved` (CW-53).');
   },
 };
-const HANDLERS = { triage: TRIAGE, refine: REFINE, implement: IMPLEMENT };
+
+// The review agent (phase 6). Its verdict is recorded for the head commit it saw (D87);
+// `merge-gate` reads `review` from the record (CW-64). The class that counts is the label
+// after the agent's own raise (CW-67), and a verdict the class doesn't allow goes to the
+// owner, recording nothing that could pass the gate (D89).
+function reviewed(plan, r, ctx, verdict) {
+  const pull = ctx.pull;
+  if (!pull || !pull.headSha) return fail(plan, ctx, 'the pull request it reviewed is unknown');
+  if (r.raiseMerge) raiseMerge(plan, r.raiseMerge, r.raiseReason.trim());
+  const cls = mergeLabel(plan.labels);
+  const at = `#${pull.number} at ${pull.headSha.slice(0, 7)}`;
+  const wrong = (why) => toNeedsAnswer(plan, 'in-review', why, `The review of ${at} doesn't fit the merge class.`);
+  if (verdict === 'approved' && cls !== 'merge:agent') {
+    return wrong(`the review agent approved, but the issue is ${cls ? code(cls) : 'without a merge class'}; only \`merge:agent\` is approved by an agent (CW-64, CW-65)`);
+  }
+  if (verdict.startsWith('recommend') && cls !== 'merge:human') {
+    return wrong(`the review agent recommended instead of approving or asking for changes, but the issue is ${cls ? code(cls) : 'without a merge class'} (CW-65)`);
+  }
+  // A verdict that fits is final for this head commit: the next review waits for a push.
+  plan.remember({ reviewedSha: pull.headSha, review: { pull: pull.number, sha: pull.headSha, verdict } });
+  if (verdict === 'changes') {
+    const failed = r.items.filter((i) => i.pass === false).length;
+    return reviewRound(plan, ctx.record, ctx.settings, `the review asked for changes to ${at}, ${failed} item${failed === 1 ? '' : 's'} failed (its comment lists them)`);
+  }
+  plan.remember({ reviewRounds: null });
+  if (verdict === 'approved') plan.say.push(`The review agent approved ${at} (CW-64). The agent merges it when \`ci\` and \`merge-gate\` are green.`);
+  else plan.say.push(`The review agent ${verdict === 'recommend-merge' ? 'recommends merging' : 'recommends not merging'} ${at}; it is \`merge:human\`, so the owner decides (CW-65).`);
+  return undefined;
+}
+const REVIEW = {
+  approve: (plan, r, ctx) => reviewed(plan, r, ctx, 'approved'),
+  changes: (plan, r, ctx) => reviewed(plan, r, ctx, 'changes'),
+  recommend: (plan, r, ctx) => reviewed(plan, r, ctx, r.merge ? 'recommend-merge' : 'recommend-not'),
+};
+const HANDLERS = { triage: TRIAGE, refine: REFINE, implement: IMPLEMENT, review: REVIEW };
 
 const SHARED = {
   questions(plan, r, ctx) {
@@ -273,14 +341,15 @@ const PHASE_ERRORS = {
 // `session`: { id, link, phase, costUsd, error }; phase is 'done', 'needs-action', 'budget',
 // 'failed' or 'timeout'. `text`: its last agent message. `created`: [{ kind, number }]
 // the session job opened from agentActions. `stale`: the issue moved on meanwhile.
-function dispatcherOutcome({ role, view, record = {}, session, text, created = [], settings, stale = false }) {
+// `pull`: { number, headSha } of the pull request the session was given (the review).
+function dispatcherOutcome({ role, view, record = {}, session, text, created = [], settings, stale = false, pull = null }) {
   const plan = new Plan(view.number, view.labels);
   const state = plan.state;
   const cost = round(Number(session.costUsd || 0));
   // CW-81: triage runs on its own per-run cap; the issue's cap counts from refinement on.
   const spentUsd = role === 'triage' ? Number(record.spentUsd || 0) : round(Number(record.spentUsd || 0) + cost);
   plan.remember({ totalUsd: round(Number(record.totalUsd || 0) + cost), ...(role === 'triage' ? {} : { spentUsd }) });
-  const ctx = { role, state, record, created, settings, spentUsd };
+  const ctx = { role, state, record, created, settings, spentUsd, pull };
 
   const parsed = parseResult(text);
   const checked = parsed.ok ? validateResult(role, parsed.result, view.number, settings) : parsed;
@@ -327,4 +396,4 @@ function dispatcherOutcome({ role, view, record = {}, session, text, created = [
   return { plan, result: r };
 }
 
-module.exports = { parseResult, validateResult, agentActions, dispatcherOutcome, scrubSecrets, OUTCOMES };
+module.exports = { parseResult, validateResult, agentActions, dispatcherOutcome, scrubSecrets, reviewComment, OUTCOMES };

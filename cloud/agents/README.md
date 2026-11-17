@@ -59,9 +59,9 @@ Outcomes by role:
 | refine, plan | `spec` | `spec` (Markdown for the marked section), `estimateUsd` | writes the marked section; the comment is the approval request; `needs-approval` (CW-30, CW-31, CW-34) |
 | implement | `pushed` | `title`, `body` (pull request; lists each acceptance criterion and how it was met) | the session job opens or updates (reopens) the one pull request from `cloud/issue-<N>` as the agent; the body may close only #N; `in-review` (CW-50, CW-51, CW-55) |
 | implement | `spec-wrong` | | `refining` without `approved` (CW-53) |
-| review | `approve` | `items`: `[{ "item", "pass", "note" }]` | `merge:agent` only: records the approval at the head commit; merges when CI and `merge-gate` are green (CW-64) |
-| review | `changes` | `items` | back to `in-progress`; one review round used (CW-68) |
-| review | `recommend` | `merge` (true or false) | `merge:human` only: posts the recommendation in the workflow document's wording (CW-65) |
+| review | `approve` | `items`: 1 to 50 `{ "item", "pass", "note" }`, all passing | posts the items as a table; `merge:agent` only (else `needs-answer`): records the approval at the head commit and runs `merge-gate`; the merge job merges when CI and `merge-gate` are green (CW-61, CW-64) |
+| review | `changes` | `items`, at least one failing | posts the items as a table; back to `in-progress`, one review round used; after `reviewRounds` rounds (a failed `ci` counts too), `needs-answer` (CW-68) |
+| review | `recommend` | `merge` (true or false), `explanation`, `classReason` to recommend merging, `items` | `merge:human` only (else `needs-answer`): posts the recommendation in the workflow document's wording; the owner decides (CW-65) |
 | scout | `recommendations` | `issues`: up to the configured number of `{ "title", "body" }` | files them as `origin:agent` issues (CW-71) |
 | record | `recorded` | `title`, `body` | opens a `merge:self` pull request from `cloud/out-of-scope-<N>` (CW-43) |
 | record | `skipped` | | nothing recorded; the comment says why |

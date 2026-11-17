@@ -11,6 +11,10 @@ on:
     types: [created]
   pull_request_target:
     types: [opened, reopened, synchronize, closed]
+  # D90: a failed `ci` run counts as a review round of the issue its pull request closes.
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
   # D62: hourly, all open issues, so a session run that ended without reporting is found.
   schedule:
     - cron: '17 * * * *'
@@ -26,6 +30,7 @@ permissions:
   contents: read
   issues: write
   pull-requests: read
+  checks: read
   actions: write
 
 # One run at a time across all issues, so two runs never hand out the same free slot
@@ -38,6 +43,8 @@ concurrency:
 jobs:
   dispatch:
     # Comments by the dispatcher itself start no run: GITHUB_TOKEN events trigger nothing.
+    # Only a failed `ci` run of a pull request needs the dispatcher; a passing one is the merge job's.
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'failure')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

@@ -280,6 +280,31 @@ test('CW-62: the snapshot maps a pull request with its files and their executabl
   assert.equal(pr.mergeableState, 'clean');
   assert.equal(pr.headRef, 'cloud/issue-1');
   assert.equal(pr.files.length, 3);
+  assert.equal(pr.ci, null);
+});
+
+test('D90: the snapshot keeps the newest `ci` check run at the head commit', () => {
+  const { mapCi } = req('github/snapshot.js');
+  assert.equal(mapCi(null), null);
+  assert.equal(mapCi({ check_runs: [] }), null);
+  assert.deepEqual(mapCi({ check_runs: [{ id: 1, status: 'completed', conclusion: 'failure' }, { id: 2, status: 'in_progress', conclusion: null }] }), { status: 'in_progress', conclusion: null });
+});
+
+test('CW-68, D90: a failed `ci` at the head commit is a review round, counted once per commit', () => {
+  const failed = { ci: { status: 'completed', conclusion: 'failure' } };
+  const plan = decide(reviewView({ merge: 'merge:agent', pull: failed }));
+  assert.equal(plan.state, 'in-progress');
+  assert.equal(plan.record.ciFailedSha, 'abc1234');
+  assert.equal(plan.record.reviewRounds, 1);
+  assert.match(plan.say.join('\n'), /Review round 1 of 3: `ci` failed on #9 at abc1234/);
+  // The same commit again changes nothing; a cancelled or running ci doesn't count.
+  assert.equal(decide(reviewView({ merge: 'merge:agent', pull: failed, record: { ciFailedSha: 'abc1234', reviewedSha: 'abc1234' } })).state, 'in-review');
+  assert.equal(decide(reviewView({ merge: 'merge:agent', pull: { ci: { status: 'completed', conclusion: 'cancelled' } } })).state, 'in-review');
+  assert.equal(decide(reviewView({ merge: 'merge:agent', pull: { ci: { status: 'in_progress', conclusion: null } } })).state, 'in-review');
+  // After the configured rounds, the owner gets it.
+  const last = decide(reviewView({ merge: 'merge:self', pull: failed, record: { reviewRounds: 2 } }));
+  assert.equal(last.state, 'needs-answer');
+  assert.match(last.say.join('\n'), /3 review rounds ended without a pass/);
 });
 
 test('CW-11: the owner answering restores the state the issue came from and starts its agent', () => {
@@ -765,6 +790,8 @@ test('cli: events map to the issues they concern', () => {
   assert.deepEqual(focusIssues('pull_request_target', { pull_request: { body: 'Fixes #4, resolves #6' } }), [4, 6]);
   assert.deepEqual(focusIssues('workflow_dispatch', { inputs: { issue: '12' } }), [12]);
   assert.equal(focusIssues('workflow_dispatch', { inputs: { issue: '' } }), 'all');
+  // D90: a failed ci run names the pull request, not the issue.
+  assert.equal(focusIssues('workflow_run', { workflow_run: { conclusion: 'failure' } }), 'all');
   assert.deepEqual(focusIssues('push', {}), []);
 });
 
