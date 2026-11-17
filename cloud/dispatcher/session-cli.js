@@ -11,7 +11,7 @@ const { createClient } = require('./github/client');
 const { loadIssueView, listIssueIndex } = require('./github/snapshot');
 const { applyPlan } = require('./github/apply');
 const { dispatchWorkflow, DISPATCH_WORKFLOW, MERGE_GATE_WORKFLOW } = require('./github/actions');
-const { readFacts, ROLE_FOR_STATE } = require('./decide');
+const { readFacts, ROLES, roleFor } = require('./decide');
 const { Plan } = require('./decide/plan');
 const L = require('./decide/labels');
 const { taskMessage, fence } = require('./decide/task');
@@ -31,7 +31,7 @@ const MAX_BODY = 65536; // GitHub's limit for an issue body
 function skipReason(view, record, role) {
   if (view.state !== 'open') return 'the issue is closed';
   const state = L.STATES.find((s) => view.labels.includes(s));
-  if (ROLE_FOR_STATE[state] !== role) return `its state ${state ? `\`${state}\`` : '(none)'} doesn't call for the ${role} agent`;
+  if (roleFor(state, view.labels) !== role) return `its state ${state ? `\`${state}\`` : '(none)'} doesn't call for the ${role} agent`;
   if (view.labels.includes(L.PAUSED)) return 'the issue is paused';
   if (!record.session || record.session.role !== role) return 'the dispatcher requested no such session';
   return null;
@@ -254,7 +254,7 @@ async function main(env = process.env) {
   const settings = loadSettings();
   const issue = Number(env.ISSUE);
   const role = String(env.ROLE || '');
-  if (!Number.isInteger(issue) || issue < 1 || !Object.values(ROLE_FOR_STATE).includes(role)) throw new Error('ISSUE must be an issue number and ROLE a role the dispatcher starts');
+  if (!Number.isInteger(issue) || issue < 1 || !ROLES.includes(role)) throw new Error('ISSUE must be an issue number and ROLE a role the dispatcher starts');
   if (settings.mode !== 'live') return console.log(`::notice::cloud/settings.json says "mode": "${settings.mode}"; no session runs.`);
   const problems = liveEnvProblems(env);
   if (problems.length) throw new Error(`the session job is not set up: ${problems.join('; ')} (build plan, owner steps 4 and 5)`);

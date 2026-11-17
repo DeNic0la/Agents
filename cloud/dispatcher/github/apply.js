@@ -5,7 +5,7 @@
 const crypto = require('crypto');
 const { formatRecord, formatDryRun, neutralizeMarkers } = require('../decide/markers');
 
-const ROLE_NAMES = { triage: 'triage', refine: 'refine', implement: 'implement', review: 'review' };
+const ROLE_NAMES = { triage: 'triage', refine: 'refine', plan: 'plan', implement: 'implement', review: 'review' };
 const usd = (n) => `$${Number(n).toFixed(2)}`;
 const code = (l) => `\`${l}\``;
 

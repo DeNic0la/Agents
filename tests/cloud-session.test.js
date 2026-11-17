@@ -400,6 +400,32 @@ test('CW-34: a written spec moves the issue to needs-approval with its estimate'
   assert.match(said(over), /above the lean cap of \$8\.00, so it starts only with `budget:extend`/);
 });
 
+const PLAN_TEXT = `${SPEC_TEXT}\n\n**Research**: none needed.\n\n**Design**: a flag.\n\n**Alternatives rejected**: a new command, too broad.\n\n**Files affected**: bin/agents (modify).\n\n**Implementation steps**:\n1. Add the flag.`;
+const FULL = ['refining', 'origin:owner', 'route:full', 'merge:human'];
+
+test('CW-31: a full-route spec also needs the design, alternatives, files and steps', () => {
+  const check = (spec) => validateResult('plan', { outcome: 'spec', spec, estimateUsd: 12, comment: ASK }, 7, settings);
+  assert.equal(check(PLAN_TEXT).ok, true);
+  assert.match(check(SPEC_TEXT).error, /full-route .spec. lacks the design, the alternatives rejected, the files affected, the implementation steps \(CW-31\)/);
+  // CW-30 still comes first.
+  assert.match(check('**Design**: x').error, /CW-30/);
+  // The lean route's refine agent needs none of it.
+  assert.equal(validateResult('refine', { outcome: 'spec', spec: SPEC_TEXT, estimateUsd: 3, comment: ASK }, 7, settings).ok, true);
+});
+
+test('CW-34, D94: the plan agent\'s spec goes to needs-approval and records its route', () => {
+  const { plan } = outcome({ role: 'plan', labels: FULL, result: { outcome: 'spec', spec: PLAN_TEXT, estimateUsd: 12, comment: ASK }, created: [{ kind: 'spec' }] });
+  assert.equal(plan.state, 'needs-approval');
+  assert.equal(plan.record.specRoute, 'full');
+  assert.match(said(plan), /route .route:full., merge class .merge:human., estimate \$12\.00/);
+  const lean = outcome({ role: 'refine', labels: LEAN, result: { outcome: 'spec', spec: SPEC_TEXT, estimateUsd: 3, comment: ASK }, created: [{ kind: 'spec' }] }).plan;
+  assert.equal(lean.record.specRoute, 'lean');
+  // Its questions wait like the refine agent's.
+  const asked = outcome({ role: 'plan', labels: FULL, result: { outcome: 'questions', comment: 'Which flag name?' } }).plan;
+  assert.equal(asked.state, 'needs-answer');
+  assert.match(said(asked), /The plan agent needs answers/);
+});
+
 test('CW-8, CW-16: a spec that could not be written into the body is a failed session', () => {
   const { plan } = outcome({ role: 'refine', labels: LEAN, result: { outcome: 'spec', spec: SPEC_TEXT, estimateUsd: 3, comment: ASK } });
   assert.equal(plan.state, 'refining');
@@ -636,6 +662,10 @@ test('skipReason: closed, wrong state and missing session record', () => {
   assert.equal(skipReason(ov(['triage']), { session }, 'triage'), null);
   assert.match(skipReason(ov(['triage'], { state: 'closed' }), { session }, 'triage'), /closed/);
   assert.match(skipReason(ov(['refining']), { session }, 'triage'), /state `refining` doesn't call for the triage agent/);
+  // D93: on the full route refining calls for the plan agent, not the refine agent.
+  assert.equal(skipReason(ov(['refining', 'route:full']), { session: { role: 'plan' } }, 'plan'), null);
+  assert.match(skipReason(ov(['refining', 'route:full']), { session: { role: 'refine' } }, 'refine'), /doesn't call for the refine agent/);
+  assert.match(skipReason(ov(['refining', 'route:lean']), { session: { role: 'plan' } }, 'plan'), /doesn't call for the plan agent/);
   assert.match(skipReason(ov([]), { session }, 'triage'), /\(none\)/);
   assert.match(skipReason(ov(['triage']), {}, 'triage'), /requested no such session/);
   assert.match(skipReason(ov(['triage']), { session: { role: 'refine' } }, 'triage'), /requested no such session/);

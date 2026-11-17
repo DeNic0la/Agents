@@ -25,6 +25,13 @@ const { Plan } = require('./plan');
 const { mergeClassCheck, mergeLabelOf, closingComment } = require('./merge');
 
 const ROLE_FOR_STATE = { triage: 'triage', refining: 'refine', ready: 'implement', 'in-progress': 'implement', 'in-review': 'review' };
+// CW-23, CW-31: on the full route the plan agent refines the issue instead (D93).
+function roleFor(state, labels) {
+  const route = routeLabel(labels instanceof Set ? labels : new Set(labels || []));
+  return state === 'refining' && route === 'route:full' ? 'plan' : ROLE_FOR_STATE[state];
+}
+// Every role a session job starts.
+const ROLES = [...new Set([...Object.values(ROLE_FOR_STATE), 'plan'])];
 // Only the owner and the dispatcher change these. Merge labels are guarded against
 // removal only: any agent may raise a class (CW-67).
 const GUARDED = [L.APPROVED, L.BUDGET_EXTEND, L.PAUSED, ...L.ORIGINS, ...L.STATES];
@@ -157,7 +164,7 @@ function intake(plan, view, facts, reopened) {
 function retriage(plan, facts) {
   plan.removeLabel(L.APPROVED);
   plan.setState('triage');
-  plan.remember({ ask: facts.askDigest, triage: null, estimateUsd: null, approvedSpec: null, waiting: null, dorFailing: null });
+  plan.remember({ ask: facts.askDigest, triage: null, estimateUsd: null, specRoute: null, approvedSpec: null, waiting: null, dorFailing: null });
   plan.say.push('The request changed: triaged again, without `approved`.');
 }
 
@@ -165,7 +172,7 @@ function retriage(plan, facts) {
 // The owner decides again, so an outsider's edits never start a session by themselves.
 function externalEdit(plan, facts) {
   plan.removeLabel(L.APPROVED);
-  plan.remember({ ask: facts.askDigest, triage: null, estimateUsd: null, approvedSpec: null, dorFailing: null });
+  plan.remember({ ask: facts.askDigest, triage: null, estimateUsd: null, specRoute: null, approvedSpec: null, dorFailing: null });
   toNeedsAnswer(plan, 'triage', 'external', 'The request changed after the owner let it in.');
 }
 
@@ -265,6 +272,20 @@ function checkApprovedSpec(plan, facts) {
   }
 }
 
+// CW-31, D94: a `full` issue is built only from a spec the plan agent wrote. When the
+// route became `full` after a lean spec, or on a direct issue that has none, the plan
+// agent writes it before anything is approved. Only a recorded `specRoute: full` counts.
+function checkSpecRoute(plan, facts) {
+  const from = facts.record.specRoute;
+  if (from === 'full' || routeLabel(plan.labels) !== 'route:full') return false;
+  if (plan.has(L.APPROVED)) plan.removeLabel(L.APPROVED);
+  plan.remember({ approvedSpec: null, specRoute: null });
+  plan.setState('refining');
+  const why = from ? `the spec was written for the ${from} route` : 'the plan agent has not written its spec';
+  plan.say.push(`The route is \`route:full\` now, and ${why}: back to \`refining\` for the plan agent, which adds the design and the steps (CW-31).`);
+  return true;
+}
+
 // CW-18: the owner closed the issue's pull request without merging it.
 function checkPullClosed(plan, view, settings) {
   const pr = view.pull;
@@ -360,8 +381,13 @@ function closedByMerge(plan, view, facts, settings) {
 function handleState(plan, view, facts, settings) {
   switch (plan.state) {
     case 'needs-answer':
-      return handleNeedsAnswer(plan, view, facts, settings);
+      handleNeedsAnswer(plan, view, facts, settings);
+      // D94: an answer that returns the issue to `ready` is checked like any `ready` issue.
+      if (plan.state === 'ready') checkSpecRoute(plan, facts);
+      return undefined;
     case 'needs-approval':
+      // An edited request is triaged again first (handleNeedsApproval, D37).
+      if (!askChanged(facts) && checkSpecRoute(plan, facts)) return undefined;
       return handleNeedsApproval(plan, view, facts, settings);
     case 'triage':
     case 'refining':
@@ -383,6 +409,7 @@ function handleState(plan, view, facts, settings) {
       if (plan.state === 'in-progress') checkMergeClass(plan, view, facts, settings);
       return undefined;
     default:
+      if (plan.state === 'ready' && checkSpecRoute(plan, facts)) return undefined;
       return checkApprovedSpec(plan, facts);
   }
 }
@@ -411,7 +438,7 @@ const SESSION_RETRIES = 1; // CW-16: one retry, then the owner
 // CW-11, CW-12, CW-14, CW-80, CW-84: which agent the state calls for, if it may start.
 function startAgent(plan, view, facts, ctx) {
   const state = plan.state;
-  const role = ROLE_FOR_STATE[state];
+  const role = roleFor(state, plan.labels);
   if (!role) return;
   if (state === 'in-review') {
     const pr = view.pull;
@@ -536,4 +563,4 @@ function decideAll(views, ctx) {
   return staged.map((s) => s.plan);
 }
 
-module.exports = { decideIssue, decideAll, decideState, readFacts, toNeedsAnswer, reviewRound, ROLE_FOR_STATE, SESSION_RETRIES };
+module.exports = { decideIssue, decideAll, decideState, readFacts, toNeedsAnswer, reviewRound, ROLE_FOR_STATE, ROLES, roleFor, SESSION_RETRIES };
