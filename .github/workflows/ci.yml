@@ -1,0 +1,51 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Read-only: code under test must not be able to post statuses.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: bash bin/agents check
+      - run: bash tests/smoke.sh
+      - run: node --test "tests/*.test.js"
+
+  windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [powershell, pwsh]
+    steps:
+      - uses: actions/checkout@v4
+      - name: smoke tests (${{ matrix.shell }})
+        shell: cmd
+        run: ${{ matrix.shell }} -NoProfile -ExecutionPolicy Bypass -File tests/smoke.ps1
+
+  ci:
+    needs: [linux, windows]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: require all jobs to succeed
+        env:
+          LINUX: ${{ needs.linux.result }}
+          WINDOWS: ${{ needs.windows.result }}
+        run: |
+          echo "linux=$LINUX windows=$WINDOWS"
+          [ "$LINUX" = "success" ] && [ "$WINDOWS" = "success" ]

@@ -316,6 +316,8 @@ pwsh -File tests\smoke.ps1                                # PowerShell 7
 
 The Windows test runs the install twice, with symlinks and with the copies used without Developer Mode, and drives `agents` through the Git Bash shim.
 
+On GitHub, the `ci` workflow runs `agents check`, the Node tests (`node --test "tests/*.test.js"`) and both smoke tests on every pull request and every push to `main`, and reports them as one `ci` check. The cloud development workflow that will build this repo from GitHub issues is being built in `cloud/`; see [docs/development-workflow.md](docs/development-workflow.md) and its [build plan](docs/specs/cloud-development-workflow-build.md).
+
 Before adopting a skill, subagent or command from somewhere else, run `agents audit <path>` on it. It prints every line that installs software, uses the network, mentions credentials, writes or deletes files, needs privileges, is destructive, bypasses permissions, or tells the agent to hide something from the user. It also flags symlinks, binaries and large files. Nothing is run, and an empty report isn't a guarantee of safety.
 
 ## Setup

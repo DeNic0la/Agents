@@ -79,6 +79,7 @@ This repository holds a personal setup for AI coding agents that can be cloned o
 | P5 | `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `COPILOT_HOME` are respected when they're set. |
 | P6 | `install.ps1` runs in Windows PowerShell 5.1 and PowerShell 7, with and without Developer Mode. `bin/agents` runs in bash on Linux and WSL, and in Git Bash on Windows. Starting a process is slow in Git Bash, so `bin/agents` doesn't start one per preset file. |
 | P7 | Smoke tests check the platform requirements on a copy of the repo with temporary home folders: `tests/smoke.sh` on Linux and WSL, `tests/smoke.ps1` on Windows in both PowerShell editions. They cover install, a second install reporting only `ok`, a changed and a deleted preset item, `agents` in a project (`add`, `--dry-run`, `sync`, removing every item, and the R17–R26 behaviors: exclude block and linked worktrees, tracked files, project and store, levels, composition, settings, removal gate, the checkout list), and uninstall. The tests run git without the developer's own configuration, run the settings merge once per installed JSON tool (`AGENTS_JSON_TOOL`) and fail when there is none; on Windows both with symlinks and with copies (forced with `AGENTS_NO_SYMLINKS=1`). |
+| P8 | On GitHub, every pull request and every push to `main` runs `agents check`, the Node tests and the smoke tests (`smoke.sh` on Linux, `smoke.ps1` on Windows in both PowerShell editions). One `ci` check fails when any of them fails. |
 
 ## 5. Global install (machine level)
 
