@@ -62,6 +62,6 @@ Outcomes by role:
 | review | `approve` | `items`: 1 to 50 `{ "item", "pass", "note" }`, all passing | posts the items as a table; `merge:agent` only (else `needs-answer`): records the approval at the head commit and runs `merge-gate`; the merge job merges when CI and `merge-gate` are green (CW-61, CW-64) |
 | review | `changes` | `items`, at least one failing | posts the items as a table; back to `in-progress`, one review round used; after `reviewRounds` rounds (a failed `ci` counts too), `needs-answer` (CW-68) |
 | review | `recommend` | `merge` (true or false), `explanation`, `classReason` to recommend merging, `items` | `merge:human` only (else `needs-answer`): posts the recommendation in the workflow document's wording; the owner decides (CW-65) |
-| scout | `recommendations` | `issues`: up to the configured number of `{ "title", "body" }` | files them as `origin:agent` issues (CW-71) |
+| scout | `recommendations` | `issues`: up to the configured number of `{ "title", "body" }` in all blocks; optional `evidence`: as many `{ "issue", "body" }` for existing issues (CW-6) | files them as `origin:agent` issues, skipping a title an issue already has (CW-71), and comments the evidence on its issue, or on the status issue when that issue is closed or waits for the owner; the cost goes on the status issue (D27) |
 | record | `recorded` | `title`, `body` | opens a `merge:self` pull request from `cloud/out-of-scope-<N>` (CW-43) |
 | record | `skipped` | | nothing recorded; the comment says why |

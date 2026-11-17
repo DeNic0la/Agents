@@ -36,6 +36,12 @@ function lastAgentText(events) {
   return '';
 }
 
+// The text of every agent message, oldest first: the scout files what each one reported.
+function agentTexts(events) {
+  return (events || []).filter((e) => e && e.type === AGENT_MESSAGE_EVENT)
+    .map((e) => (Array.isArray(e.content) ? e.content : []).filter((b) => b && b.type === 'text').map((b) => b.text).join('\n'));
+}
+
 // What's left after one request's overshoot (the budget stops between requests).
 function sessionBudget(limitUsd, settings) {
   const margin = Number(settings.platform.requestMarginUsd || 0);
@@ -129,4 +135,4 @@ async function runSession({
   }
 }
 
-module.exports = { runSession, lastAgentText, sessionBudget, agentName, SetupError, AGENT_MESSAGE_EVENT };
+module.exports = { runSession, lastAgentText, agentTexts, sessionBudget, agentName, SetupError, AGENT_MESSAGE_EVENT };

@@ -1,5 +1,5 @@
 // The owner's stop switch and its resume (CW-84), run by .github/workflows/stop.yml and
-// resume.yml. COMMAND=stop turns off the dispatch, session and merge workflows, cancels
+// resume.yml. COMMAND=stop turns off the dispatch, session, merge and scout workflows, cancels
 // their runs, interrupts every running agent session on the platform and records each
 // interrupted session's cost on its issue. COMMAND=resume turns them on again and starts a
 // full reconcile. Reads GITHUB_TOKEN, GITHUB_REPOSITORY, optional GITHUB_API_URL,
@@ -8,7 +8,10 @@
 
 const fs = require('fs');
 const { createClient } = require('./github/client');
-const { listOpenIssues, loadIssueView } = require('./github/snapshot');
+const { listOpenIssues, loadIssueView, listCommentsSince } = require('./github/snapshot');
+const { refreshStatus, statusComment, recordedScoutSessions } = require('./github/status');
+const { findStatusIssue } = require('./decide/status');
+const { monthStart, monthSpend, monthStatus } = require('./decide/spend');
 const { applyPlan } = require('./github/apply');
 const actions = require('./github/actions');
 const { readFacts, ROLES } = require('./decide');
@@ -29,7 +32,7 @@ const recentEnough = (settings, now) => (s) => sessionPhase(s) === 'running'
 
 // The platform's agent sessions of every role, newest first, mapped to { id, issue, role, createdAt, raw }.
 async function agentSessions(platform, settings, now) {
-  const names = new Map(ROLES.map((r) => [agentName(r), r]));
+  const names = new Map([...ROLES, 'scout'].map((r) => [agentName(r), r]));
   const agents = (await platform.listAgents()).filter((a) => names.has(a.name));
   const out = [];
   for (const agent of agents) {
@@ -125,7 +128,8 @@ async function stopAll({ gh, platform, settings, now = Date.now, sleep = (ms) =>
   // request cleared. The view is read after the runs ended: a request a session job
   // cleared in time is not recorded twice.
   const matched = new Set();
-  for (const issue of await listOpenIssues(gh)) {
+  const open = await listOpenIssues(gh);
+  for (const issue of open) {
     if (!issue.labels.some((l) => L.STATES.includes(l))) continue;
     const view = await loadIssueView(gh, issue.number);
     const record = readFacts(view, settings).record;
@@ -139,9 +143,38 @@ async function stopAll({ gh, platform, settings, now = Date.now, sleep = (ms) =>
     await applyPlan(gh, plan, 'live');
     report.issues.push(view.number);
   }
+  const scouts = sessions.filter((s) => s.role === 'scout');
+  for (const s of scouts) matched.add(s.id);
   // A session no open request accounts for: interrupted all the same, named in the summary.
   report.unmatched = sessions.filter((s) => !matched.has(s.id) && sessionPhase(s.raw) === 'running').map((s) => s.id);
+  // The dispatch workflow is off now, so the status issue is brought up to date here (CW-84).
+  try {
+    report.scouts = await recordScouts(gh, settings, open, scouts, ended, log);
+  } catch (err) {
+    log(`::warning::Could not update the status issue: ${err.message}`);
+  }
   return report;
+}
+
+// D108: a scout session has no issue: its cost goes on the status issue, unless its run
+// recorded it there before it was cancelled. Then the status issue says it is stopped.
+async function recordScouts(gh, settings, open, scouts, ended, log) {
+  const month = monthStatus(monthSpend(await listCommentsSince(gh, monthStart()), settings).monthUsd, settings);
+  const existing = findStatusIssue(open, settings);
+  const recorded = existing ? recordedScoutSessions((await loadIssueView(gh, existing.number)).timeline, settings) : new Set();
+  const ids = [];
+  let spent = 0;
+  for (const s of scouts.filter((x) => !recorded.has(x.id))) {
+    const view = ended.get(s.id) || { running: false, costUsd: costUsd(s.raw) };
+    const cost = Math.round(Number(view.costUsd || 0) * 100) / 100;
+    const link = settings.platform.sessionLink.replace('{id}', s.id);
+    const text = `The stop switch ended the scout session [${s.id}](${link})${view.running ? ', which is not confirmed stopped: check it at its link' : ''}. It cost $${cost.toFixed(2)}; what it found is not filed.`;
+    await statusComment(gh, settings, { text, record: { sessionCostUsd: cost, scoutSession: s.id }, monthStatus: month, log });
+    spent += cost;
+    ids.push(s.id);
+  }
+  await refreshStatus(gh, settings, { monthStatus: monthStatus(Math.round((month.monthUsd + spent) * 100) / 100, settings), stopped: true, create: true, log });
+  return ids;
 }
 
 async function resumeAll({ gh, ref, stoppedVariable, log = console.log }) {
@@ -170,6 +203,7 @@ function summary(command, report) {
     ...report.failed.map((f) => `- Not disabled: ${f}`),
     report.issues.length ? `Recorded on: ${report.issues.map((n) => `#${n}`).join(', ')}.` : 'No issue had a session open.',
     ...(report.unmatched.length ? [`Interrupted sessions no issue accounts for: ${report.unmatched.join(', ')}.`] : []),
+    ...(report.scouts && report.scouts.length ? [`Scout sessions recorded on the status issue: ${report.scouts.join(', ')}.`] : []),
   ].join('\n');
 }
 

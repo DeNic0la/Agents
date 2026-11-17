@@ -7,6 +7,7 @@ const SESSION_WORKFLOW = 'session.yml';
 const DISPATCH_WORKFLOW = 'dispatch.yml';
 const MERGE_GATE_WORKFLOW = 'merge-gate.yml';
 const MERGE_WORKFLOW = 'merge.yml';
+const SCOUT_WORKFLOW = 'scout.yml';
 const ACTIVE_STATUSES = ['queued', 'in_progress', 'waiting', 'pending', 'requested'];
 
 const runName = (issue, role) => `session #${issue} ${role}`;
@@ -36,8 +37,8 @@ function dispatchWorkflow(client, workflow, ref, inputs) {
 }
 
 // CW-84: the workflows the stop switch turns off. merge-gate stays on: it is a required
-// check and only reports; without dispatch, session and merge nothing it reports acts.
-const STOPPABLE_WORKFLOWS = [DISPATCH_WORKFLOW, SESSION_WORKFLOW, MERGE_WORKFLOW];
+// check and only reports; without dispatch, session, merge and scout nothing it reports acts.
+const STOPPABLE_WORKFLOWS = [DISPATCH_WORKFLOW, SESSION_WORKFLOW, MERGE_WORKFLOW, SCOUT_WORKFLOW];
 
 function setWorkflowEnabled(client, workflow, enabled) {
   return client.request('PUT', `/repos/${client.repo}/actions/workflows/${workflow}/${enabled ? 'enable' : 'disable'}`);
@@ -64,5 +65,5 @@ async function runStatus(client, id) {
 
 module.exports = {
   activeSessionIssues, dispatchWorkflow, parseRunName, runName, setWorkflowEnabled, activeRuns, cancelRun, runStatus,
-  SESSION_WORKFLOW, DISPATCH_WORKFLOW, MERGE_GATE_WORKFLOW, MERGE_WORKFLOW, STOPPABLE_WORKFLOWS,
+  SESSION_WORKFLOW, DISPATCH_WORKFLOW, MERGE_GATE_WORKFLOW, MERGE_WORKFLOW, SCOUT_WORKFLOW, STOPPABLE_WORKFLOWS,
 };

@@ -23,7 +23,7 @@ You are the scout agent of this repository's cloud development workflow. Once a 
 
 ## What to recommend
 
-At most the number the task gives. Fewer is fine; none is fine. Before each one, search open and closed issues and `.out-of-scope/` and drop anything that exists already or was rejected. If you have new evidence for an existing issue, say so in `comment` instead of filing another.
+At most the number the task gives. Fewer is fine; none is fine. Before each one, search open and closed issues and `.out-of-scope/` and drop anything that exists already or was rejected. If you have new evidence for an existing issue, put it in `evidence` as `{ "issue": <number>, "body": "..." }` instead of filing another, at most as many as the issue limit.
 
 Each recommendation is `{ "title", "body" }`. The body states:
 
@@ -39,6 +39,6 @@ You may emit one `agent-result` block per recommendation as you go, each with ou
 
 ````text
 ```agent-result
-{ "outcome": "recommendations", "issues": [ { "title": "...", "body": "..." } ], "injection": null }
+{ "outcome": "recommendations", "issues": [ { "title": "...", "body": "..." } ], "evidence": [], "injection": null }
 ```
 ````

@@ -8,7 +8,9 @@
 const fs = require('fs');
 const path = require('path');
 const { createClient } = require('./github/client');
-const { loadIssueView, listIssueIndex } = require('./github/snapshot');
+const { loadIssueView, listIssueIndex, listCommentsSince } = require('./github/snapshot');
+const { statusComment } = require('./github/status');
+const { monthStart, monthSpend, monthStatus } = require('./decide/spend');
 const { applyPlan } = require('./github/apply');
 const { dispatchWorkflow, DISPATCH_WORKFLOW, MERGE_GATE_WORKFLOW } = require('./github/actions');
 const { readFacts, ROLES, roleFor } = require('./decide');
@@ -182,6 +184,17 @@ async function runForIssue({ issue, role, settings, gh, agentClient, platform, m
   session.text = scrubSecrets(session.text, tokens);
   if (session.error) session.error = scrubSecrets(session.error, tokens);
   log(`session ${session.id || '(not started)'}: ${session.phase}, $${Number(session.costUsd || 0).toFixed(2)}`);
+  // CW-103: a session that could not start is reported on the status issue at once, and
+  // on its issue below (CW-16).
+  if (!session.id) {
+    try {
+      const { monthUsd } = monthSpend(await listCommentsSince(gh, monthStart()), settings);
+      const text = `The ${role} session for #${issue} could not start (CW-103): ${session.error}`;
+      await statusComment(gh, settings, { text, monthStatus: monthStatus(monthUsd, settings), log });
+    } catch (err) {
+      log(`::warning::Could not report the start failure on the status issue: ${scrubSecrets(err.message, tokens)}`);
+    }
+  }
 
   view = await loadIssueView(gh, issue);
   facts = readFacts(view, settings);

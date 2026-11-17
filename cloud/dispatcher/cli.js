@@ -11,7 +11,9 @@ const { createClient } = require('./github/client');
 const { loadIssueView, listOpenIssues, listClosedSince, listCommentsSince } = require('./github/snapshot');
 const { applyPlan, dryRunComment } = require('./github/apply');
 const { decideAll, readFacts } = require('./decide');
-const { activeSessionIssues, dispatchWorkflow, SESSION_WORKFLOW, MERGE_GATE_WORKFLOW } = require('./github/actions');
+const { activeSessionIssues, activeRuns, dispatchWorkflow, SESSION_WORKFLOW, MERGE_GATE_WORKFLOW, SCOUT_WORKFLOW } = require('./github/actions');
+const { refreshStatus, statusComment } = require('./github/status');
+const { findStatusIssue, statusFlags, flagsChanged } = require('./decide/status');
 const { closingIssues } = require('./decide/spec');
 const L = require('./decide/labels');
 const { settingsProblems } = require('./decide/settings');
@@ -100,6 +102,23 @@ function reservedUsd(views, running, others, settings) {
   return Math.round(usd * 100) / 100;
 }
 
+// CW-74, CW-83, CW-86: when this run rewrites the status issue. The hourly schedule and a
+// full reconcile by hand bring it up to date and create it; any other run only when the
+// cap, the warning or the stop switch flipped, so the owner learns of it at once.
+// Returns { create } or null.
+function statusRefresh({ eventName, focus, status, flags }) {
+  if (eventName === 'schedule' || (eventName === 'workflow_dispatch' && focus === 'all')) return { create: true };
+  if (flagsChanged(status, flags)) return { create: Object.values(flags).some(Boolean) };
+  return null;
+}
+
+// A running scout session may spend up to its per-run cap (D103).
+async function scoutReserveUsd(client, settings) {
+  const runs = await activeRuns(client, SCOUT_WORKFLOW);
+  const cap = Number(settings.caps.perRunUsd && settings.caps.perRunUsd.scout);
+  return runs.length && Number.isFinite(cap) ? cap : 0;
+}
+
 function loadSettings(file = SETTINGS) {
   if (!fs.existsSync(file)) throw new Error('cloud/settings.json is missing');
   const settings = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -135,23 +154,42 @@ async function main() {
   for (const n of active) if (!numbers.includes(n)) others.push(await loadIssueView(client, n));
   // CW-83, CW-85: the month's spend from the session costs recorded on issues.
   const { monthUsd } = monthSpend(await listCommentsSince(client, monthStart()), settings);
-  const spend = { monthUsd, reservedUsd: reservedUsd(views, running, others, settings) };
+  const scoutUsd = live ? await scoutReserveUsd(client, settings) : 0;
+  const spend = { monthUsd, reservedUsd: Math.round((reservedUsd(views, running, others, settings) + scoutUsd) * 100) / 100 };
   const month = monthStatus(monthUsd, settings);
   console.log(`Month so far: $${monthUsd.toFixed(2)} of $${month.capUsd.toFixed(2)}; running sessions may still spend $${spend.reservedUsd.toFixed(2)}.`);
-  // CW-86: the status issue says so from phase 9 on; until then the run's log does.
   if (month.reached) console.log(`::warning::The monthly cap of $${month.capUsd.toFixed(2)} is reached: no session starts until the turn of the month or a raised cap.`);
   else if (month.warning) console.log(`::warning::The month's spend has passed the warning level of ${Math.round(settings.warningLevel * 100)}% of the cap.`);
-  const ctx = { settings, control: { stopped: env.CLOUD_STOPPED === 'true' }, running, activeElsewhere, spend };
+  const stopped = env.CLOUD_STOPPED === 'true';
+  const ctx = { settings, control: { stopped }, running, activeElsewhere, spend };
 
+  // CW-103: a session that could not be started is reported, and the run fails visibly.
+  const failures = [];
+  const start = async (workflow, inputs, what) => {
+    try {
+      await dispatchWorkflow(client, workflow, env.DEFAULT_BRANCH || 'main', inputs);
+    } catch (err) {
+      failures.push(`${what}: ${err.message}`);
+      console.log(`::error::Could not start ${what}: ${err.message}`);
+    }
+  };
   for (const plan of decideAll(views, ctx)) {
     if (live && plan.start) plan.remember({ session: { role: plan.start.role, limitUsd: plan.start.limitUsd, at: new Date().toISOString() } });
     await applyPlan(client, plan, settings.mode);
-    if (live && plan.start) await dispatchWorkflow(client, SESSION_WORKFLOW, env.DEFAULT_BRANCH || 'main', { issue: plan.number, role: plan.start.role });
+    if (live && plan.start) await start(SESSION_WORKFLOW, { issue: plan.number, role: plan.start.role }, `the ${plan.start.role} session for #${plan.number}`);
     // CW-63: merge-gate reads the record just written; its run then starts the merge job.
     const check = plan.record.mergeCheck;
-    if (live && check && check.pull) await dispatchWorkflow(client, MERGE_GATE_WORKFLOW, env.DEFAULT_BRANCH || 'main', { pr: String(check.pull) });
+    if (live && check && check.pull) await start(MERGE_GATE_WORKFLOW, { pr: String(check.pull) }, `merge-gate for #${check.pull}`);
     const summary = dryRunComment(plan);
     console.log(`#${plan.number}: ${summary ? summary.split('\n').filter((l) => l.startsWith('- ')).join(' ') : 'nothing to do'}`);
+  }
+
+  const refresh = statusRefresh({ eventName: env.GITHUB_EVENT_NAME, focus, status: findStatusIssue(open, settings), flags: statusFlags({ month, stopped }) });
+  if (refresh || failures.length) await refreshStatus(client, settings, { monthStatus: month, stopped, create: Boolean((refresh && refresh.create) || failures.length) });
+  if (failures.length) {
+    const text = ['The dispatcher could not start what it decided (CW-103). A requested session counts as lost on its issue and starts again on a later run.', '', ...failures.map((f) => `- ${f}`)].join('\n');
+    await statusComment(client, settings, { text, monthStatus: month });
+    process.exitCode = 1;
   }
   return undefined;
 }
@@ -163,4 +201,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { reservedUsd, focusIssues, reconcileTargets, loadSettings, liveSetupMissing, runningSessions };
+module.exports = { reservedUsd, statusRefresh, scoutReserveUsd, focusIssues, reconcileTargets, loadSettings, liveSetupMissing, runningSessions };
