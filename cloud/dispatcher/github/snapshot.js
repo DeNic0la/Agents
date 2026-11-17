@@ -66,6 +66,58 @@ function mapIssue(issue) {
   };
 }
 
+// The issue's pull request as the rules see it. `mergeable` is null while GitHub computes it.
+function mapPull(pr, { closedBy = null, files = null } = {}) {
+  return {
+    number: pr.number,
+    title: pr.title || '',
+    author: loginOf(pr.user),
+    state: pr.state,
+    draft: Boolean(pr.draft),
+    merged: Boolean(pr.merged),
+    mergedBy: loginOf(pr.merged_by),
+    mergeSha: pr.merge_commit_sha || null,
+    closedBy,
+    headSha: pr.head && pr.head.sha,
+    headRef: pr.head && pr.head.ref,
+    mergeable: pr.mergeable === undefined ? null : pr.mergeable,
+    mergeableState: pr.mergeable_state || null,
+    files,
+  };
+}
+
+// CW-62: the changed files for the merge class rules. `executable` is true when the file
+// is executable (mode 100755) at the head or at the base commit, so deleting an executable or
+// removing its bit counts too (D85). A path missing from a tree it should be in (a truncated
+// tree) leaves it unknown, unless the other side already says executable.
+function mapFiles(rawFiles, tree, baseTree) {
+  const modesOf = (t) => new Map(((t && t.tree) || []).map((e) => [e.path, e.mode]));
+  const head = modesOf(tree);
+  const base = modesOf(baseTree);
+  return (rawFiles || []).map((f) => {
+    const sides = [];
+    if (f.status !== 'removed') sides.push(head.get(f.filename));
+    if (f.status !== 'added') sides.push(base.get(f.previous_filename || f.filename));
+    const executable = sides.includes('100755') ? true : sides.includes(undefined) ? undefined : false;
+    return {
+      path: f.filename,
+      previousPath: f.previous_filename || null,
+      status: f.status,
+      additions: f.additions || 0,
+      deletions: f.deletions || 0,
+      executable,
+    };
+  });
+}
+
+async function loadPullFiles(client, pr) {
+  const r = `/repos/${client.repo}`;
+  const raw = await client.paginate(`${r}/pulls/${pr.number}/files`);
+  const tree = await optional(client.request('GET', `${r}/git/trees/${pr.head.sha}?recursive=1`), null);
+  const baseTree = pr.base && pr.base.sha ? await optional(client.request('GET', `${r}/git/trees/${pr.base.sha}?recursive=1`), null) : null;
+  return mapFiles(raw, tree, baseTree);
+}
+
 async function optional(promise, fallback) {
   try {
     return await promise;
@@ -92,7 +144,8 @@ async function loadIssueView(client, number) {
     const pr = await client.request('GET', `${r}/pulls/${n}`);
     if (!closingIssues(pr.body).includes(number)) continue;
     const closedBy = pr.state === 'closed' ? loginOf((await client.request('GET', `${r}/issues/${n}`)).closed_by) : null;
-    pull = { number: n, author: loginOf(pr.user), state: pr.state, merged: Boolean(pr.merged), closedBy, headSha: pr.head && pr.head.sha };
+    const files = pr.state === 'open' ? await loadPullFiles(client, pr) : null;
+    pull = mapPull(pr, { closedBy, files });
     break;
   }
 
@@ -121,4 +174,4 @@ async function listIssueIndex(client, max = 500) {
   return all.map(mapIssue).filter((i) => !i.isPull).slice(0, max).map(({ number, title, state }) => ({ number, title, state }));
 }
 
-module.exports = { mapTimeline, referencingPulls, mapIssue, loadIssueView, listOpenIssues, listClosedSince, listIssueIndex };
+module.exports = { mapTimeline, referencingPulls, mapIssue, mapPull, mapFiles, loadPullFiles, loadIssueView, listOpenIssues, listClosedSince, listIssueIndex };

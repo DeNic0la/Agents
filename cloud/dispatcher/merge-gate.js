@@ -44,7 +44,12 @@ async function loadIssue(client, repository, number, settings) {
 
 async function judge(client, repository, number, settings) {
   const prData = await client.request('GET', `/repos/${repository}/pulls/${number}`);
-  const pr = { author: prData.user && prData.user.login, headSha: prData.head.sha, body: prData.body || '' };
+  const pr = {
+    author: prData.user && prData.user.login,
+    headSha: prData.head.sha,
+    body: prData.body || '',
+    labels: (prData.labels || []).map((l) => (typeof l === 'string' ? l : l.name)),
+  };
   const issueNumber = issueNumberOf(pr);
   const issue = issueNumber ? await loadIssue(client, repository, issueNumber, settings) : null;
   return { number, headSha: pr.headSha, open: prData.state === 'open', statuses: judgePull({ pr, issue, settings }) };
@@ -83,4 +88,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { targetOf };
+module.exports = { targetOf, loadIssue };

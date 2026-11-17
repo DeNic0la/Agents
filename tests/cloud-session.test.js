@@ -362,9 +362,9 @@ test('CW-7: filed issues are listed in the comment', () => {
 });
 
 test('an outcome the dispatcher cannot act on yet goes to the owner', () => {
-  const { plan } = outcome({ role: 'implement', labels: ['in-progress'], result: { outcome: 'pushed', title: 'T', body: 'B' } });
+  const { plan } = outcome({ role: 'review', labels: ['in-review'], result: { outcome: 'approve', items: [] } });
   assert.equal(plan.state, 'needs-answer');
-  assert.match(said(plan), /can't act on the implement outcome `pushed` yet/);
+  assert.match(said(plan), /can't act on the review outcome `approve` yet/);
 });
 
 // ---- Phase 4: the refine agent's spec ---------------------------------------------------
@@ -649,12 +649,19 @@ test('liveEnvProblems lists the missing variables', () => {
 });
 
 // A fake GitHub: one issue, its timeline, and a log of every write in order.
-function fakeGitHub({ labels = ['triage', 'origin:owner'], timeline, state = 'open' } = {}) {
+// `branches`: name -> head sha of the branches that exist; `pulls`: the pull requests from them.
+function fakeGitHub({ labels = ['triage', 'origin:owner'], timeline, state = 'open', role = 'triage', branches = {}, pulls = [] } = {}) {
   const writes = [];
   const raw = timeline || [
     ...labels.map((l) => ({ event: 'labeled', actor: { login: BOT }, label: { name: l } })),
-    { event: 'commented', actor: { login: BOT }, body: `Starting.\n\n${formatRecord({ state: labels.find((l) => ['triage', 'refining', 'ready'].includes(l)), session: { role: 'triage', limitUsd: 1, at: 'now' } })}` },
+    { event: 'commented', actor: { login: BOT }, body: `Starting.\n\n${formatRecord({ state: labels.find((l) => ['triage', 'refining', 'ready', 'in-progress'].includes(l)), session: { role, limitUsd: 1, at: 'now' } })}` },
   ];
+  const branch = (p) => {
+    const m = /\/branches\/(.+)$/.exec(p);
+    const sha = m && branches[decodeURIComponent(m[1])];
+    if (!sha) throw Object.assign(new Error('Branch not found'), { status: 404 });
+    return { commit: { sha } };
+  };
   const issue = { number: 7, title: 'Add a flag', state, user: { login: OWNER }, body: 'Add a --dry-run flag.', labels: labels.map((name) => ({ name })) };
   const other = { number: 3, title: 'Old', state: 'closed', user: { login: OWNER }, labels: [] };
   const gh = {
@@ -662,6 +669,7 @@ function fakeGitHub({ labels = ['triage', 'origin:owner'], timeline, state = 'op
     writes,
     request: async (method, p, body) => {
       if (method === 'GET' && p === '/repos/o/r/issues/7') return issue;
+      if (method === 'GET' && p.includes('/branches/')) return branch(p);
       if (method === 'GET') throw Object.assign(new Error('unexpected GET'), { status: 404 });
       writes.push({ who: 'gh', method, path: p, body });
       return {};
@@ -676,8 +684,14 @@ function fakeGitHub({ labels = ['triage', 'origin:owner'], timeline, state = 'op
   const agent = {
     repo: 'o/r',
     request: async (method, p, body) => {
+      if (method === 'GET' && p.includes('/branches/')) return branch(p);
       writes.push({ who: 'agent', method, path: p, body });
+      if (method === 'POST' && p.endsWith('/pulls')) return { number: 50 };
       return p.endsWith('/issues') ? { number: 100 + writes.filter((w) => w.who === 'agent' && w.path.endsWith('/issues')).length } : {};
+    },
+    paginate: async (p) => {
+      writes.push({ who: 'agent', method: 'LIST', path: p });
+      return pulls;
     },
   };
   return { gh, agent, writes, issue };
@@ -930,4 +944,90 @@ test('CW-21, CW-25: close adds a PATCH request when live and a line in the dry r
   assert.match(dryRunComment(plan), /- close the issue as completed/);
   plan.close = null;
   assert.equal(requestsFor(plan, 'live', 'o/r').some((r) => r.method === 'PATCH'), false);
+});
+
+// ---- Phase 5: the implement agent's pull request ------------------------------------
+
+const BUILDING = ['in-progress', 'origin:owner', 'route:direct', 'merge:self', 'approved'];
+const PUSHED = { outcome: 'pushed', title: 'Add --dry-run', body: 'Adds the flag.\n\nAcceptance: `bin/agents sync --dry-run` writes nothing.' };
+
+test('CW-50: a pushed pull request body may close only its own issue', () => {
+  assert.equal(validateResult('implement', { ...PUSHED, body: 'Done.\n\nCloses #7' }, 7, settings).ok, true);
+  assert.equal(validateResult('implement', PUSHED, 7, settings).ok, true);
+  const other = validateResult('implement', { ...PUSHED, body: 'Done.\n\nCloses #7\nFixes #8' }, 7, settings);
+  assert.equal(other.ok, false);
+  assert.match(other.error, /closes #8; it may close only #7/);
+  assert.deepEqual(agentActions('implement', PUSHED, 7).pull, { title: 'Add --dry-run', body: PUSHED.body });
+});
+
+test('CW-51: pushed with its pull request moves the issue to in-review and remembers the pull request', () => {
+  const { plan } = outcome({ role: 'implement', labels: BUILDING, result: PUSHED, created: [{ kind: 'pull', number: 50, headSha: 'abc123', reused: false }] });
+  assert.equal(plan.state, 'in-review');
+  assert.deepEqual(plan.record.pull, { number: 50, sha: 'abc123' });
+  assert.match(said(plan), /Pull request #50 is open: `in-review`/);
+});
+
+test('CW-16: pushed without a pull request is a failed session, retried once', () => {
+  const { plan } = outcome({ role: 'implement', labels: BUILDING, result: PUSHED });
+  assert.equal(plan.state, 'in-progress');
+  assert.match(said(plan), /could not be opened or updated[\s\S]*Retrying once/);
+  assert.equal(plan.record.failures, 1);
+});
+
+test('CW-53: spec-wrong sends the issue back to refining without approved', () => {
+  const { plan } = outcome({ role: 'implement', labels: BUILDING, result: { outcome: 'spec-wrong', comment: 'Step 2 contradicts AGENTS.md.' } });
+  assert.equal(plan.state, 'refining');
+  assert.ok(plan.remove.includes('approved'));
+  assert.equal(plan.record.approvedSpec, null);
+  assert.match(said(plan), /CW-53/);
+});
+
+test('CW-50, CW-51: the implement job mounts the existing branch and opens the one pull request as the agent', async () => {
+  const fg = fakeGitHub({ labels: BUILDING, role: 'implement', branches: { 'cloud/issue-7': 'abc123' } });
+  const { deps, platform } = jobDeps(fg, block(PUSHED), { role: 'implement' });
+  assert.equal(await runForIssue(deps), 'done');
+  const created = platform.log.created[0];
+  assert.equal(created.resources[0].checkout.name, 'cloud/issue-7');
+  assert.match(created.initialMessage, /`cloud\/issue-7` exists and is mounted: continue it/);
+
+  const agentWrites = fg.writes.filter((w) => w.who === 'agent');
+  assert.equal(agentWrites[0].method, 'LIST');
+  assert.match(agentWrites[0].path, /\/pulls\?state=all&head=o%3Acloud%2Fissue-7$/);
+  const open = agentWrites.find((w) => w.method === 'POST' && w.path === '/repos/o/r/pulls');
+  assert.equal(open.body.head, 'cloud/issue-7');
+  assert.equal(open.body.base, 'main');
+  assert.match(open.body.body, /Merge class: merge:self\n\nCloses #7$/);
+
+  const comment = fg.writes.find((w) => w.who === 'gh' && w.path.endsWith('/comments'));
+  assert.equal(recordOf(comment).state, 'in-review');
+  assert.deepEqual(recordOf(comment).pull, { number: 50, sha: 'abc123' });
+});
+
+test('CW-55: a later session updates the open pull request, and reopens one closed without merging', async () => {
+  const fg = fakeGitHub({ labels: BUILDING, role: 'implement', branches: { 'cloud/issue-7': 'def456' }, pulls: [{ number: 40, state: 'closed', merged_at: null }, { number: 41, state: 'open' }] });
+  await runForIssue(jobDeps(fg, block(PUSHED), { role: 'implement' }).deps);
+  const patch = fg.writes.find((w) => w.who === 'agent' && w.method === 'PATCH');
+  assert.equal(patch.path, '/repos/o/r/pulls/41');
+  assert.equal(patch.body.state, undefined);
+  assert.ok(!fg.writes.some((w) => w.method === 'POST' && w.path.endsWith('/pulls')));
+
+  const closed = fakeGitHub({ labels: BUILDING, role: 'implement', branches: { 'cloud/issue-7': 'def456' }, pulls: [{ number: 40, state: 'closed', merged_at: null }] });
+  await runForIssue(jobDeps(closed, block(PUSHED), { role: 'implement' }).deps);
+  const reopen = closed.writes.find((w) => w.who === 'agent' && w.method === 'PATCH');
+  assert.deepEqual([reopen.path, reopen.body.state], ['/repos/o/r/pulls/40', 'open']);
+  const comment = closed.writes.find((w) => w.who === 'gh' && w.path.endsWith('/comments'));
+  assert.match(comment.body.body, /Pull request #40 is updated/);
+});
+
+test('CW-50: without the branch, the job mounts main, and a pushed result with no branch is a failure', async () => {
+  const fg = fakeGitHub({ labels: BUILDING, role: 'implement' });
+  const { deps, platform, log } = jobDeps(fg, block(PUSHED), { role: 'implement' });
+  await runForIssue(deps);
+  assert.equal(platform.log.created[0].resources[0].checkout.name, 'main');
+  assert.match(platform.log.created[0].initialMessage, /`cloud\/issue-7` doesn't exist yet, so `main` is mounted/);
+  assert.ok(log.some((l) => /Could not open or update the pull request for #7: .*cloud\/issue-7 doesn't exist/.test(l)));
+  assert.ok(!fg.writes.some((w) => w.who === 'agent' && w.path.endsWith('/pulls')));
+  const comment = fg.writes.find((w) => w.who === 'gh' && w.path.endsWith('/comments'));
+  assert.match(comment.body.body, /could not be opened or updated/);
+  assert.equal(recordOf(comment).failures, 1);
 });

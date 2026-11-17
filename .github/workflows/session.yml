@@ -19,10 +19,12 @@ on:
         options: [triage, refine, implement, review]
 
 # issues: write for the dispatcher's comment and labels; actions: write to start the next
-# dispatch run. The agent identity's token is minted from the App's key inside the job.
+# dispatch run; pull-requests: read for the issue's pull request and its files in the
+# snapshot (D84). The agent identity's token is minted from the App's key inside the job.
 permissions:
   contents: read
   issues: write
+  pull-requests: read
   actions: write
 
 concurrency:

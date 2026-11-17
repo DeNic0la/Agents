@@ -1,0 +1,48 @@
+# The agent's merge (cloud/dispatcher/merge-cli.js, CW-63, CW-64). Merges each open pull
+# request by the agent whose issue is merge:self or merge:agent once `ci`, `merge-gate` and
+# `owner-merge` are green at its head commit. Every trigger runs this file and the code from
+# the default branch: a pull request never changes how it gets merged.
+name: merge
+
+on:
+  workflow_run:
+    workflows: [ci, merge-gate]
+    types: [completed]
+  # D76: a fallback, so a merge whose last trigger was lost still happens within the hour.
+  schedule:
+    - cron: '47 * * * *'
+  workflow_dispatch:
+
+# issues: write for the dispatcher's record of the merge; actions: write to start a dispatch
+# run after a conflict. The agent identity's token, which merges, is minted inside the job.
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+  checks: read
+  statuses: read
+  actions: write
+
+concurrency:
+  group: merge
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node cloud/dispatcher/merge-cli.js
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          CLOUD_STOPPED: ${{ vars.CLOUD_STOPPED }}
+          AGENT_APP_ID: ${{ vars.AGENT_APP_ID }}
+          AGENT_APP_PRIVATE_KEY: ${{ secrets.AGENT_APP_PRIVATE_KEY }}

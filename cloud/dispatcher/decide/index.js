@@ -6,7 +6,9 @@
 // A view of an issue:
 //   { number, state: 'open'|'closed', author, body, labels: [names], isPull,
 //     timeline: [{ type: 'labeled'|'unlabeled'|'commented'|'closed'|'reopened', actor, label, body }],
-//     dependencies: [{ number, state }], pull: { number, author, state, merged, closedBy, headSha } | null }
+//     dependencies: [{ number, state }],
+//     pull: { number, title, author, state, draft, merged, mergedBy, mergeSha, closedBy, headSha,
+//             mergeable, mergeableState, files: [{ path, previousPath, status, additions, deletions, executable }] | null } | null }
 // The context:
 //   { settings, control: { stopped }, running: Set of issue numbers with a session,
 //     queue: issue numbers that may start implementing now (ready.startableQueue),
@@ -20,6 +22,7 @@ const { splitBody, digest } = require('./spec');
 const { checkReady, routeLabel, startableQueue } = require('./ready');
 const { unsetCaps } = require('./settings');
 const { Plan } = require('./plan');
+const { mergeClassCheck, mergeLabelOf, closingComment } = require('./merge');
 
 const ROLE_FOR_STATE = { triage: 'triage', refining: 'refine', ready: 'implement', 'in-progress': 'implement', 'in-review': 'review' };
 // Only the owner and the dispatcher change these. Merge labels are guarded against
@@ -269,6 +272,55 @@ function checkPullClosed(plan, view, settings) {
   toNeedsAnswer(plan, 'in-progress', 'pr-closed', `The owner closed #${pr.number} without merging.`);
 }
 
+const agentPull = (view, settings) => {
+  const pr = view.pull;
+  return pr && pr.state === 'open' && actorKind(pr.author, settings) === 'agent' ? pr : null;
+};
+
+// CW-62: on every push, the class the changed paths, file types and size allow, raised
+// onto the issue when higher (CW-67: never lowered). In `in-review`, a confirmed
+// `merge:self` is recorded at the head commit; `merge-gate` reads that record (CW-63).
+function checkMergeClass(plan, view, facts, settings) {
+  const pr = agentPull(view, settings);
+  if (!pr || !pr.files) return;
+  const check = mergeClassCheck(plan.labels, pr, settings);
+  if (check.raised) {
+    for (const m of L.MERGES) if (m !== check.effective) plan.removeLabel(m);
+    plan.addLabel(check.effective);
+    plan.say.push(`Raised the merge class to ${code(check.effective)} for #${pr.number}: ${check.reasons.join('; ')} (CW-62).`);
+  }
+  if (plan.state !== 'in-review' || check.effective !== 'merge:self') return;
+  const done = facts.record.mergeCheck;
+  if (done && done.sha === pr.headSha && done.merge === 'merge:self') return;
+  plan.remember({ mergeCheck: { sha: pr.headSha, merge: 'merge:self', pull: pr.number } });
+  plan.say.push(`Confirmed \`merge:self\` for #${pr.number} at ${String(pr.headSha).slice(0, 7)}: the agent merges it once CI is green (CW-63).`);
+}
+
+// CW-55: a pull request that conflicts with the default branch goes back to the implement
+// agent, which brings the branch up to date. `mergeable` is computed lazily: unknown is no conflict.
+function checkConflict(plan, view, settings) {
+  const pr = agentPull(view, settings);
+  if (!pr || pr.mergeableState !== 'dirty') return;
+  plan.setState('in-progress');
+  plan.say.push(`#${pr.number} conflicts with the default branch: back to \`in-progress\`, so the implement agent brings the branch up to date (CW-55).`);
+}
+
+// CW-69: after the owner merged, the dispatcher posts the closing comment; after the
+// agent's merge, the merge job did, and when it couldn't, the dispatcher does (D86).
+// A merge by anyone else gets none.
+function closedByMerge(plan, view, facts, settings) {
+  const pr = view.pull;
+  const m = facts.record.merged;
+  if (m && m.by === 'agent' && m.commented === false) {
+    plan.say.push(closingComment({ pull: m.pull, title: pr && pr.number === m.pull ? pr.title : '', by: 'agent', record: facts.record }));
+    plan.remember({ merged: { ...m, commented: true } });
+    return;
+  }
+  if (!pr || !pr.merged || facts.record.merged || actorKind(pr.mergedBy, settings) !== 'owner') return;
+  plan.say.push(closingComment({ pull: pr.number, title: pr.title, by: 'owner', record: facts.record }));
+  plan.remember({ merged: { pull: pr.number, sha: pr.mergeSha || null, by: 'owner' } });
+}
+
 function handleState(plan, view, facts, settings) {
   switch (plan.state) {
     case 'needs-answer':
@@ -285,6 +337,12 @@ function handleState(plan, view, facts, settings) {
     case 'in-review':
       checkApprovedSpec(plan, facts);
       if (plan.state === 'in-review') checkPullClosed(plan, view, settings);
+      if (plan.state === 'in-review') checkConflict(plan, view, settings);
+      if (['in-review', 'in-progress'].includes(plan.state)) checkMergeClass(plan, view, facts, settings);
+      return undefined;
+    case 'in-progress':
+      checkApprovedSpec(plan, facts);
+      if (plan.state === 'in-progress') checkMergeClass(plan, view, facts, settings);
       return undefined;
     default:
       return checkApprovedSpec(plan, facts);
@@ -320,6 +378,11 @@ function startAgent(plan, view, facts, ctx) {
   if (state === 'in-review') {
     const pr = view.pull;
     if (!pr || pr.state !== 'open' || actorKind(pr.author, ctx.settings) !== 'agent' || facts.record.reviewedSha === pr.headSha) return;
+    // CW-61: merge:self gets no review; the merge job merges it (CW-63).
+    if (mergeLabelOf(plan.labels) === 'merge:self') {
+      plan.notes.push(`no review for \`merge:self\`: the agent merges #${pr.number} when CI and \`merge-gate\` are green`);
+      return;
+    }
   }
   if (state === 'refining' && !routeLabel(plan.labels)) {
     plan.notes.push('no refine agent: the issue has no route; move it to `triage`');
@@ -376,6 +439,7 @@ function decideState(view, ctx) {
   if (view.isPull || actorKind(view.author, settings) === 'dispatcher') return { plan, facts, view, final: true };
   if (view.state === 'closed') {
     closeCleanup(plan);
+    closedByMerge(plan, view, facts, settings);
     return { plan, facts, view, final: true };
   }
   revertUntrustedChanges(plan, view, settings);

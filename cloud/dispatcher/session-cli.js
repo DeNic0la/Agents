@@ -17,6 +17,7 @@ const L = require('./decide/labels');
 const { taskMessage } = require('./decide/task');
 const { withSpec, splitBody } = require('./decide/spec');
 const { agentActions, dispatcherOutcome, parseResult, validateResult, scrubSecrets } = require('./decide/outcome');
+const { branchName, pullBody, pullToReuse, mergeLabelOf } = require('./decide/merge');
 const { parseDefinition } = require('./platform/sync');
 const { createPlatformClient } = require('./platform/client');
 const { installationToken } = require('./platform/app-token');
@@ -45,6 +46,50 @@ function bodyChanged(before, after) {
 
 // Only a session that ended by itself, and is known to have stopped, speaks for the agent.
 const publishable = (session) => session.phase === 'done' && !session.running;
+
+// The head commit of a branch, or null when it doesn't exist.
+async function branchHead(client, branch) {
+  try {
+    const b = await client.request('GET', `/repos/${client.repo}/branches/${encodeURIComponent(branch)}`);
+    return (b && b.commit && b.commit.sha) || null;
+  } catch (err) {
+    if (err && err.status === 404) return null;
+    throw err;
+  }
+}
+
+// CW-50, CW-55: the implement agent works on the issue's one branch. It continues the
+// branch when it exists, else creates it from the default branch.
+function branchSection(branch, exists, defaultBranch) {
+  const b = `\`${branch}\``;
+  const d = `\`${defaultBranch}\``;
+  return {
+    title: 'Branch',
+    text: exists
+      ? `Your branch ${b} exists and is mounted: continue it. If ${d} moved on, merge it in and resolve the conflicts first. Push only to ${b}.`
+      : `The branch ${b} doesn't exist yet, so ${d} is mounted. Create ${b} from it and push only to ${b}.`,
+  };
+}
+
+// CW-51, CW-55: opens the issue's one pull request, or updates it; one closed without
+// merging is reopened. Returns the entry for `created`.
+async function publishPull(agent, { issue, pull, labels, defaultBranch }) {
+  const branch = branchName(issue);
+  const headSha = await branchHead(agent, branch);
+  if (!headSha) throw new Error(`the agent reported \`pushed\`, but the branch ${branch} doesn't exist`);
+  const checked = pullBody(pull.body, issue, mergeLabelOf(labels));
+  if (!checked.ok) throw new Error(checked.error);
+  const owner = String(agent.repo).split('/')[0];
+  const r = `/repos/${agent.repo}/pulls`;
+  const existing = pullToReuse(await agent.paginate(`${r}?state=all&head=${encodeURIComponent(`${owner}:${branch}`)}`));
+  if (existing) {
+    const patch = { title: pull.title, body: checked.body, ...(existing.state === 'closed' ? { state: 'open' } : {}) };
+    await agent.request('PATCH', `${r}/${existing.number}`, patch);
+    return { kind: 'pull', number: existing.number, headSha, reused: true };
+  }
+  const made = await agent.request('POST', r, { title: pull.title, head: branch, base: defaultBranch, body: checked.body });
+  return { kind: 'pull', number: made.number, headSha, reused: false };
+}
 
 // One session, start to end. Every outside dependency is passed in.
 async function runForIssue({ issue, role, settings, gh, agentClient, platform, mintToken, readDefinition, defaultBranch = 'main', stopped = false, now, sleep, log = console.log }) {
@@ -75,8 +120,16 @@ async function runForIssue({ issue, role, settings, gh, agentClient, platform, m
     const def = parseDefinition(readDefinition(role), `${role}.md`);
     const environmentName = def.environment === 'web' ? settings.platform.webEnvironment : settings.platform.repoEnvironment;
     const issues = role === 'triage' ? await listIssueIndex(gh) : [];
-    const message = taskMessage({ role, view, record: facts.record, settings, limitUsd, issues, branch: defaultBranch });
-    session = await runSession({ client: platform, role, environmentName, settings, limitUsd, message, branch: defaultBranch, mintToken: mint, metadata: { issue: String(issue), role }, now, sleep, log });
+    let mount = defaultBranch;
+    const sections = [];
+    if (role === 'implement') {
+      const branch = branchName(issue);
+      const exists = Boolean(await branchHead(gh, branch));
+      if (exists) mount = branch;
+      sections.push(branchSection(branch, exists, defaultBranch));
+    }
+    const message = taskMessage({ role, view, record: facts.record, settings, limitUsd, issues, branch: mount, sections });
+    session = await runSession({ client: platform, role, environmentName, settings, limitUsd, message, branch: mount, mintToken: mint, metadata: { issue: String(issue), role }, now, sleep, log });
   } catch (err) {
     session = { id: null, link: null, phase: 'failed', text: '', error: err.message };
   }
@@ -112,6 +165,13 @@ async function runForIssue({ issue, role, settings, gh, agentClient, platform, m
       } catch (err) {
         specFailed = true;
         log(`::warning::Could not write the spec into #${issue}: ${scrubSecrets(err.message, tokens)}`);
+      }
+    }
+    if (actions.pull) {
+      try {
+        created.push(await publishPull(agent, { issue, pull: actions.pull, labels: view.labels, defaultBranch }));
+      } catch (err) {
+        log(`::warning::Could not open or update the pull request for #${issue}: ${scrubSecrets(err.message, tokens)}`);
       }
     }
     for (const i of actions.issues) {
@@ -170,4 +230,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { runForIssue, skipReason, bodyChanged, publishable, liveEnvProblems, main };
+module.exports = { runForIssue, skipReason, bodyChanged, publishable, liveEnvProblems, branchSection, publishPull, main };

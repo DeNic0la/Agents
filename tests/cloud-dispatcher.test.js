@@ -184,6 +184,104 @@ test('CW-11: an open pull request by the agent starts the review agent once per 
   assert.equal(decide(view({ ...base, timeline, pull: { ...base.pull, author: OWNER } })).start, null);
 });
 
+// ---- Phase 5: the merge class on every push, conflicts, the owner's merge ---------------
+
+const DOCS = [{ path: 'docs/guide.md', status: 'modified', additions: 3, deletions: 1, executable: false }];
+const reviewView = ({ merge = 'merge:self', pull = {}, record = {} } = {}) => {
+  const labels = ['origin:owner', 'route:direct', merge, 'approved', 'in-review'];
+  return view({
+    body: withSpec(),
+    labels,
+    timeline: [...labels.map((l) => ev.label(l, l === 'approved' ? OWNER : BOT)), ev.record({ ...TRIAGED, state: 'in-review', approvedSpec: digest(SPEC), ...record })],
+    pull: { number: 9, author: AGENT, state: 'open', merged: false, headSha: 'abc1234', mergeable: true, mergeableState: 'clean', files: DOCS, ...pull },
+  });
+};
+
+test('CW-61, CW-63: merge:self gets no review; the dispatcher confirms the class at the head commit', () => {
+  const plan = decide(reviewView());
+  assert.equal(plan.start, null);
+  assert.match(plan.notes.join('\n'), /no review for `merge:self`/);
+  assert.deepEqual(plan.record.mergeCheck, { sha: 'abc1234', merge: 'merge:self', pull: 9 });
+  assert.match(plan.say.join('\n'), /Confirmed `merge:self` for #9 at abc1234/);
+  // Confirmed once per head commit.
+  const again = decide(reviewView({ record: { mergeCheck: { sha: 'abc1234', merge: 'merge:self', pull: 9 } } }));
+  assert.equal(again.record.mergeCheck, undefined);
+  assert.equal(again.say.length, 0);
+  // A new push is confirmed again.
+  assert.equal(decide(reviewView({ pull: { headSha: 'def5678' }, record: { mergeCheck: { sha: 'abc1234', merge: 'merge:self' } } })).record.mergeCheck.sha, 'def5678');
+});
+
+test('CW-62, CW-67: a push that touches a merge:human path raises the class and confirms nothing', () => {
+  const files = [...DOCS, { path: 'cloud/settings.json', status: 'modified', additions: 1, deletions: 1 }];
+  const plan = decide(reviewView({ pull: { files } }));
+  assert.ok(plan.add.includes('merge:human'));
+  assert.ok(plan.remove.includes('merge:self'));
+  assert.match(plan.say.join('\n'), /Raised the merge class to `merge:human` for #9: touches cloud\//);
+  assert.equal(plan.record.mergeCheck, undefined);
+  // Never lowered: a merge:agent issue with docs-only changes stays merge:agent.
+  const agent = decide(reviewView({ merge: 'merge:agent' }));
+  assert.ok(!agent.add.some((l) => l.startsWith('merge:')) && !agent.remove.some((l) => l.startsWith('merge:')));
+  assert.equal(agent.record.mergeCheck, undefined);
+  assert.equal(agent.start.role, 'review');
+});
+
+test('CW-62: an executable file raises the class even outside the merge:human paths', () => {
+  const plan = decide(reviewView({ pull: { files: [{ path: 'docs/run', status: 'added', additions: 2, deletions: 0, executable: true }] } }));
+  assert.ok(plan.add.includes('merge:human'));
+});
+
+test('CW-55: a pull request that conflicts with the default branch goes back to in-progress', () => {
+  const plan = decide(reviewView({ pull: { mergeable: false, mergeableState: 'dirty' } }));
+  assert.ok(plan.add.includes('in-progress'));
+  assert.ok(plan.remove.includes('in-review'));
+  assert.match(plan.say.join('\n'), /#9 conflicts with the default branch/);
+  // Not yet computed is no conflict.
+  assert.equal(decide(reviewView({ pull: { mergeable: null, mergeableState: 'unknown' } })).add.includes('in-progress'), false);
+});
+
+test('CW-69: after the owner merged, the dispatcher posts the closing comment once', () => {
+  const closedView = (record = {}, mergedBy = OWNER) => view({
+    state: 'closed',
+    labels: ['origin:owner', 'merge:agent'],
+    timeline: [ev.record({ state: 'in-review', totalUsd: 3.5, filed: [12], ...record })],
+    pull: { number: 9, title: 'Add --dry-run', author: AGENT, state: 'closed', merged: true, mergedBy, mergeSha: 'fff0000', headSha: 'abc' },
+  });
+  const plan = decide(closedView());
+  const text = plan.say.join('\n');
+  assert.match(text, /Merged #9 \(Add --dry-run\) by the owner/);
+  assert.match(text, /\$3\.50/);
+  assert.match(text, /#12/);
+  assert.deepEqual(plan.record.merged, { pull: 9, sha: 'fff0000', by: 'owner' });
+  assert.equal(decide(closedView({ merged: { pull: 9, by: 'owner' } })).say.length, 0);
+  // The agent's merge job posts its own closing comment.
+  assert.equal(decide(closedView({}, AGENT)).say.length, 0);
+  // D86: unless it couldn't; then the dispatcher posts it, once.
+  const owed = decide(closedView({ merged: { pull: 9, by: 'agent', commented: false } }, AGENT));
+  assert.match(owed.say.join('\n'), /Merged #9 \(Add --dry-run\) as the agent/);
+  assert.equal(owed.record.merged.commented, true);
+  assert.equal(decide(closedView({ merged: { pull: 9, by: 'agent', commented: true } }, AGENT)).say.length, 0);
+});
+
+test('CW-62: the snapshot maps a pull request with its files and their executable bit', () => {
+  const { mapPull, mapFiles } = req('github/snapshot.js');
+  const files = mapFiles(
+    [{ filename: 'a.sh', status: 'added', additions: 2, deletions: 0 }, { filename: 'b.md', previous_filename: 'old.md', status: 'renamed', additions: 1, deletions: 1 }, { filename: 'c.md', status: 'removed' }],
+    { tree: [{ path: 'a.sh', mode: '100755' }, { path: 'b.md', mode: '100644' }] },
+    { tree: [{ path: 'old.md', mode: '100644' }] },
+  );
+  assert.deepEqual(files.map((f) => [f.path, f.previousPath, f.executable]), [['a.sh', null, true], ['b.md', 'old.md', false], ['c.md', null, undefined]]);
+  // D85: deleting an executable, or removing its bit, counts as touching one.
+  const before = { tree: [{ path: 'run', mode: '100755' }, { path: 'tool', mode: '100755' }] };
+  const after = { tree: [{ path: 'tool', mode: '100644' }] };
+  const changed = mapFiles([{ filename: 'run', status: 'removed' }, { filename: 'tool', status: 'modified' }], after, before);
+  assert.deepEqual(changed.map((f) => f.executable), [true, true]);
+  const pr = mapPull({ number: 9, title: 'T', user: { login: AGENT }, state: 'open', draft: false, merged: false, merged_by: null, head: { sha: 'abc', ref: 'cloud/issue-1' }, mergeable_state: 'clean' }, { files });
+  assert.equal(pr.mergeable, null);
+  assert.equal(pr.mergeableState, 'clean');
+  assert.equal(pr.headRef, 'cloud/issue-1');
+  assert.equal(pr.files.length, 3);
+});
+
 test('CW-11: the owner answering restores the state the issue came from and starts its agent', () => {
   const labels = ['origin:owner', 'route:lean', 'merge:agent', 'needs-answer'];
   const p = decide(view({

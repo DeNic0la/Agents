@@ -45,11 +45,20 @@ function dependsOn(spec) {
   return [...out].sort((a, b) => a - b);
 }
 
+const CLOSING = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+(#\d+\b|[\w.-]+\/[\w.-]+#\d+\b|https?:\/\/\S+\/(?:issues|pull)\/\d+\b)/gi;
+
 // "Closes #12" and its GitHub synonyms in a pull request body.
 function closingIssues(body) {
   const out = new Set();
-  for (const m of String(body || '').matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/gi)) out.add(Number(m[1]));
+  for (const m of String(body || '').matchAll(CLOSING)) if (m[1].startsWith('#')) out.add(Number(m[1].slice(1)));
   return [...out].sort((a, b) => a - b);
 }
 
-module.exports = { SPEC_START, SPEC_END, splitBody, withSpec, digest, dependsOn, closingIssues };
+// Closing references GitHub also follows that name an issue by repository or URL
+// ("Fixes o/r#8", "Closes https://github.com/o/r/issues/8"). The merge gate can't tell
+// which issue they close, so a body with one names no single issue (D85).
+function qualifiedClosing(body) {
+  return [...String(body || '').matchAll(CLOSING)].map((m) => m[1]).filter((ref) => !ref.startsWith('#'));
+}
+
+module.exports = { SPEC_START, SPEC_END, splitBody, withSpec, digest, dependsOn, closingIssues, qualifiedClosing };
