@@ -78,7 +78,8 @@ const NEEDS = {
     if (!isText(r.spec, MAX_SPEC) || !isUsd(r.estimateUsd)) return `\`spec\` (at most ${MAX_SPEC} characters) and \`estimateUsd\` are required`;
     if (r.spec.includes(SPEC_START) || r.spec.includes(SPEC_END) || r.spec.includes('<!-- dispatcher-')) return '`spec` must not contain the section or record markers';
     const missing = SPEC_PARTS.filter(([, re]) => !re.test(r.spec)).map(([name]) => name);
-    return missing.length ? `\`spec\` lacks ${missing.join(', ')} (CW-30)` : null;
+    if (missing.length) return `\`spec\` lacks ${missing.join(', ')} (CW-30)`;
+    return isText(r.comment) ? null : '`comment` must hold the approval request (CW-34)';
   },
   pushed: (r) => (isText(r.title, 256) && isText(r.body) ? null : '`title` and `body` of the pull request are required'),
   approve: (r) => (Array.isArray(r.items) ? null : '`items` is required'),
@@ -94,7 +95,8 @@ function validateResult(role, r, number, settings) {
   if (!allowed.includes(r.outcome)) return { ok: false, error: `${code(String(r.outcome))} is not an outcome of the ${role} agent` };
   if (r.comment !== undefined && !(typeof r.comment === 'string' && r.comment.length <= MAX_COMMENT)) return { ok: false, error: '`comment` must be text' };
   if (r.file !== undefined && !issueList(r.file, 0, MAX_FILED)) return { ok: false, error: `\`file\` must be at most ${MAX_FILED} \`{ title, body }\` (CW-7)` };
-  if (r.injection !== undefined && typeof r.injection !== 'string') return { ok: false, error: '`injection` must be text' };
+  // null is "nothing found", as every role's example shows.
+  if (r.injection !== undefined && r.injection !== null && typeof r.injection !== 'string') return { ok: false, error: '`injection` must be text or null' };
   if (r.raiseMerge !== undefined) {
     if (!['merge:agent', 'merge:human'].includes(r.raiseMerge)) return { ok: false, error: '`raiseMerge` must be `merge:agent` or `merge:human`' };
     if (!isText(r.raiseReason, 2000)) return { ok: false, error: '`raiseMerge` needs a `raiseReason`' };
@@ -257,8 +259,10 @@ function dispatcherOutcome({ role, view, record = {}, session, text, created = [
 
   const parsed = parseResult(text);
   const checked = parsed.ok ? validateResult(role, parsed.result, view.number, settings) : parsed;
-  const r = checked.ok ? parsed.result : null;
-  const outcome = r ? r.outcome : session.phase === 'budget' ? 'budget reached' : 'failed';
+  // The session's end is authoritative: a result block written before a budget stop or a
+  // timeout is not acted on (publishable() in the session job holds the same rule).
+  const r = checked.ok && session.phase === 'done' ? parsed.result : null;
+  const outcome = r ? r.outcome : session.running ? 'not confirmed stopped' : session.phase === 'budget' ? 'budget reached' : 'failed';
   // CW-102: every session links its record and cost on the issue.
   if (session.id) plan.say.push(`The ${role} session [${session.id}](${session.link}) ended: ${outcome}. It cost ${usd(cost)}.`);
   else plan.say.push(`The ${role} session did not start.`);
@@ -273,8 +277,13 @@ function dispatcherOutcome({ role, view, record = {}, session, text, created = [
   const filed = created.filter((c) => c.kind === 'file');
   if (filed.length) plan.say.push(`Filed ${filed.map((c) => `#${c.number}`).join(', ')} for things outside this issue (CW-7).`);
 
-  if (r) {
+  if (session.running) {
+    // The platform still reports it running: a retry could run a second paid session.
+    toNeedsAnswer(plan, state, `the ${role} session could not be confirmed stopped; check it at its link and stop it there`, `The ${role} session may still be running.`);
+  } else if (r) {
     if (record.failures) plan.remember({ failures: null });
+    // A new triage result replaces the old route's estimate (DoR item 7).
+    if (role === 'triage' && record.estimateUsd !== undefined) plan.remember({ estimateUsd: null });
     const handler = (HANDLERS[role] && HANDLERS[role][r.outcome]) || SHARED[r.outcome];
     // Later phases add the other roles' outcomes; until then the owner decides.
     if (handler) handler(plan, r, ctx);

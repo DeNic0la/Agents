@@ -5,19 +5,23 @@
 
 const { actorKind } = require('./actors');
 
-const RECORD_RE = /<!-- dispatcher-record (\{[\s\S]*?\}) -->/;
+const RECORD_RE = /<!-- dispatcher-record (\{[\s\S]*?\}) -->/g;
 const DRY_RUN_RE = /<!-- dispatcher-dry-run ([0-9a-f]+) -->/;
 
 // '>' only occurs inside JSON strings, where > is the same character, so the
 // marker can never close the HTML comment early.
 const formatRecord = (data) => `<!-- dispatcher-record ${JSON.stringify(data).replace(/>/g, '\\u003e')} -->`;
 const formatDryRun = (hash) => `<!-- dispatcher-dry-run ${hash} -->`;
+// Text the dispatcher quotes (an agent's words, an error) can never read as a marker or
+// hide behind an HTML comment: `<!--` shows as written.
+const neutralizeMarkers = (text) => String(text).replace(/<!--/g, '<\\!--');
 
+// The last marker: the dispatcher appends its record after everything it quotes.
 function parseRecord(body) {
-  const m = RECORD_RE.exec(body || '');
-  if (!m) return null;
+  const all = [...String(body || '').matchAll(RECORD_RE)];
+  if (!all.length) return null;
   try {
-    const data = JSON.parse(m[1]);
+    const data = JSON.parse(all[all.length - 1][1]);
     return data && typeof data === 'object' && !Array.isArray(data) ? data : null;
   } catch {
     return null;
@@ -46,4 +50,4 @@ function readRecord(timeline, settings) {
   return { record, at, lastDryRun };
 }
 
-module.exports = { formatRecord, formatDryRun, parseRecord, readRecord };
+module.exports = { formatRecord, formatDryRun, parseRecord, readRecord, neutralizeMarkers };

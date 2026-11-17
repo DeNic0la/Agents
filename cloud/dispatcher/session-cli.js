@@ -15,7 +15,7 @@ const { readFacts, ROLE_FOR_STATE } = require('./decide');
 const { Plan } = require('./decide/plan');
 const L = require('./decide/labels');
 const { taskMessage } = require('./decide/task');
-const { withSpec } = require('./decide/spec');
+const { withSpec, splitBody } = require('./decide/spec');
 const { agentActions, dispatcherOutcome, parseResult, validateResult, scrubSecrets } = require('./decide/outcome');
 const { parseDefinition } = require('./platform/sync');
 const { createPlatformClient } = require('./platform/client');
@@ -31,13 +31,25 @@ function skipReason(view, record, role) {
   if (view.state !== 'open') return 'the issue is closed';
   const state = L.STATES.find((s) => view.labels.includes(s));
   if (ROLE_FOR_STATE[state] !== role) return `its state ${state ? `\`${state}\`` : '(none)'} doesn't call for the ${role} agent`;
+  if (view.labels.includes(L.PAUSED)) return 'the issue is paused';
   if (!record.session || record.session.role !== role) return 'the dispatcher requested no such session';
   return null;
 }
 
+// The ask or the spec changed while the session ran: its result answers an older issue.
+function bodyChanged(before, after) {
+  const a = splitBody(before.body);
+  const b = splitBody(after.body);
+  return a.ask !== b.ask || a.spec !== b.spec;
+}
+
+// Only a session that ended by itself, and is known to have stopped, speaks for the agent.
+const publishable = (session) => session.phase === 'done' && !session.running;
+
 // One session, start to end. Every outside dependency is passed in.
 async function runForIssue({ issue, role, settings, gh, agentClient, platform, mintToken, readDefinition, defaultBranch = 'main', stopped = false, now, sleep, log = console.log }) {
-  let view = await loadIssueView(gh, issue);
+  const before = await loadIssueView(gh, issue);
+  let view = before;
   let facts = readFacts(view, settings);
   const skip = stopped ? 'the stop switch CLOUD_STOPPED is on' : skipReason(view, facts.record, role);
   if (skip) {
@@ -75,10 +87,18 @@ async function runForIssue({ issue, role, settings, gh, agentClient, platform, m
 
   view = await loadIssueView(gh, issue);
   facts = readFacts(view, settings);
-  const stale = Boolean(skipReason(view, facts.record, role));
+  const stale = Boolean(skipReason(view, facts.record, role)) || bodyChanged(before, view);
   const parsed = parseResult(session.text);
   const created = [];
-  if (!stale && parsed.ok && validateResult(role, parsed.result, issue, settings).ok) {
+  if (!stale && publishable(session) && parsed.ok && validateResult(role, parsed.result, issue, settings).ok) {
+    try {
+      await publish();
+    } catch (err) {
+      // The dispatcher still records the session; `created` says what got through.
+      log(`::warning::Could not publish the ${role} agent's result on #${issue}: ${scrubSecrets(err.message, tokens)}`);
+    }
+  }
+  async function publish() {
     const agent = await agentClient(await mint());
     const actions = agentActions(role, parsed.result, issue);
     let specFailed = false;
@@ -150,4 +170,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { runForIssue, skipReason, liveEnvProblems, main };
+module.exports = { runForIssue, skipReason, bodyChanged, publishable, liveEnvProblems, main };

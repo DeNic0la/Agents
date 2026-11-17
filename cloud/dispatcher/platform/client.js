@@ -77,7 +77,9 @@ function createPlatformClient({
   }
 
   function delayMs(res, attempt) {
-    const ra = Number(res.headers && res.headers.get ? res.headers.get('retry-after') : NaN);
+    // A missing header is null, and Number(null) is 0: that would retry at once.
+    const raw = res.headers && res.headers.get ? res.headers.get('retry-after') : null;
+    const ra = raw === null || raw === undefined || String(raw).trim() === '' ? NaN : Number(raw);
     if (Number.isFinite(ra) && ra >= 0) return ra * 1000;
     return 500 * 2 ** attempt;
   }

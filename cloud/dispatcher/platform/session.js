@@ -59,8 +59,8 @@ async function rotateToken(client, sessionId, mintToken) {
   if (repo) await client.setResourceToken(sessionId, repo.id, token);
 }
 
-// Returns { id, link, phase, costUsd, text }; phase is 'done', 'needs-action',
-// 'budget', 'failed' or 'timeout'.
+// Returns { id, link, phase, costUsd, text, running?, error? }; phase is 'done', 'needs-action',
+// 'budget', 'failed' or 'timeout'. `running`: the session didn't stop when interrupted.
 async function runSession({
   client, role, environmentName, settings, limitUsd, message, branch = 'main', metadata,
   mintToken, now = Date.now, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), log = () => {},
@@ -86,28 +86,39 @@ async function runSession({
   let rotated = started;
   let stoppedAt = null;
   let session = created;
-  for (;;) {
-    await sleep(POLL_MS);
-    session = await client.getSession(id);
-    let phase = sessionPhase(session);
-    if (phase === 'done' && !session.stop_reason && now() - started < STARTUP_GRACE_MS) phase = 'running';
-    if (phase !== 'running') {
-      const text = phase === 'failed' ? '' : lastAgentText(await client.listEvents(id));
-      return { id, link, phase: stoppedAt !== null && phase === 'done' ? 'timeout' : phase, costUsd: costUsd(session), text };
-    }
-    if (stoppedAt !== null) {
-      if (now() - stoppedAt > STOP_GRACE_MS) return { id, link, phase: 'timeout', costUsd: costUsd(session), text: '' };
-      continue;
-    }
-    if (now() - started >= timeoutMs) {
-      log(`session ${id} reached the time limit; interrupting`);
-      await client.interrupt(id);
-      stoppedAt = now();
-      continue;
-    }
-    if (now() - rotated >= rotateMs) {
-      await rotateToken(client, id, mintToken);
-      rotated = now();
+  try {
+    return await pollSession();
+  } catch (err) {
+    // Started, then lost: keep its id and what it cost so far (CW-102). It may still run,
+    // so no retry starts a second one.
+    return { id, link, phase: 'failed', running: true, costUsd: costUsd(session), text: '', error: err.message };
+  }
+
+  async function pollSession() {
+    for (;;) {
+      await sleep(POLL_MS);
+      session = await client.getSession(id);
+      let phase = sessionPhase(session);
+      if (phase === 'done' && !session.stop_reason && now() - started < STARTUP_GRACE_MS) phase = 'running';
+      if (phase !== 'running') {
+        const text = phase === 'failed' ? '' : lastAgentText(await client.listEvents(id));
+        return { id, link, phase: stoppedAt !== null && phase === 'done' ? 'timeout' : phase, costUsd: costUsd(session), text };
+      }
+      if (stoppedAt !== null) {
+        // Still running after the interrupt: say so, so no retry starts a second session.
+        if (now() - stoppedAt > STOP_GRACE_MS) return { id, link, phase: 'timeout', running: true, costUsd: costUsd(session), text: '' };
+        continue;
+      }
+      if (now() - started >= timeoutMs) {
+        log(`session ${id} reached the time limit; interrupting`);
+        await client.interrupt(id);
+        stoppedAt = now();
+        continue;
+      }
+      if (now() - rotated >= rotateMs) {
+        await rotateToken(client, id, mintToken);
+        rotated = now();
+      }
     }
   }
 }

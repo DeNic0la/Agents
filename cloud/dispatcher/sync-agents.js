@@ -25,8 +25,12 @@ const realIo = {
   },
 };
 
-// A subset match: the platform may add fields to what we created.
+// A subset match: the platform may add fields to what we created, but a list (allowed
+// hosts) must match exactly, or an extra host would pass as unchanged.
 function covers(have, want) {
+  if (Array.isArray(want)) {
+    return Array.isArray(have) && have.length === want.length && want.every((w, i) => covers(have[i], w));
+  }
   if (want && typeof want === 'object') {
     if (!have || typeof have !== 'object') return false;
     return Object.keys(want).every((k) => covers(have[k], want[k]));
