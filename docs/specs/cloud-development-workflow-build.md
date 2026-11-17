@@ -88,7 +88,7 @@ A review of the workflow document and the spec before phase 0 found contradictio
 | D19 | C9: scenario 13 and CW-19 were in no phase | Both are in phase 2; phase 10 runs all 13 scenarios. | yes |
 | D20 | C10: `docs/specs/` and this file fell under `merge:self` | `docs/specs/` is `merge:agent`; this build plan is `merge:human`. | yes |
 | D21 | U1: which of several state labels stays | The state the dispatcher last recorded; without a record, the earliest in life order. | yes |
-| D22 | U2: "oldest first" and what counts against the slot limit | Lowest issue number first. `in-progress` and `in-review` hold a slot; only a start from `ready` waits. | yes |
+| D22 | U2: "oldest first" and what counts against the slot limit | Lowest issue number first. `in-progress` and `in-review` hold a slot, as do `needs-answer` issues whose recorded return state is `in-progress` or `in-review`; only a start from `ready` waits. | yes |
 | D23 | U3: Definition of Ready items 5 to 7 have no label | Triage's result (checked, estimate) is a dispatcher record. Dependencies are GitHub's "blocked by" relations or `Depends on #N` lines in the marked section. | yes |
 | D24 | U4: what "changes what an issue asks for" means | The issue body outside the marked section changes. Title edits don't count. | yes |
 | D25 | U5: "stop at their next step" can't be observed | Every hard limit is also bounded by what's left of the month, less what running sessions may still spend. | yes |
