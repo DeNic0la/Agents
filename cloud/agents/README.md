@@ -63,5 +63,5 @@ Outcomes by role:
 | review | `changes` | `items`, at least one failing | posts the items as a table; back to `in-progress`, one review round used; after `reviewRounds` rounds (a failed `ci` counts too), `needs-answer` (CW-68) |
 | review | `recommend` | `merge` (true or false), `explanation`, `classReason` to recommend merging, `items` | `merge:human` only (else `needs-answer`): posts the recommendation in the workflow document's wording; the owner decides (CW-65) |
 | scout | `recommendations` | `issues`: up to the configured number of `{ "title", "body" }` in all blocks; optional `evidence`: as many `{ "issue", "body" }` for existing issues (CW-6) | files them as `origin:agent` issues, skipping a title an issue already has (CW-71), and comments the evidence on its issue, or on the status issue when that issue is closed or waits for the owner; the cost goes on the status issue (D27) |
-| record | `recorded` | `title`, `body` | opens a `merge:self` pull request from `cloud/out-of-scope-<N>` (CW-43) |
+| record | `recorded` | `title`, `body` | opens a pull request from `cloud/out-of-scope-<N>`; when it changes only `.out-of-scope/` it is `merge:self` at that commit and the merge job merges it, otherwise it gets `merge:human` and the owner decides (CW-43, D117, D118) |
 | record | `skipped` | | nothing recorded; the comment says why |
