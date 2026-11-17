@@ -48,13 +48,15 @@ function focusIssues(name, event) {
 
 // Which issues one run decides: the ones the event concerns, every open issue changed
 // recently, every recently closed issue that still carries labels to clean, and every
-// `ready` issue, which competes for the free slots (D47). `activeElsewhere` counts the
-// active issues outside that set.
+// `ready` issue, which competes for the free slots (D47). While one waits, every
+// `needs-answer` issue comes along too: only its record says whether it holds a slot (D22).
+// `activeElsewhere` counts the active issues outside that set.
 function reconcileTargets({ focus, open, closed = [], now = Date.now(), recentMinutes = RECENT_MINUTES }) {
   const since = now - recentMinutes * 60 * 1000;
   const recent = (i) => i.updatedAt && Date.parse(i.updatedAt) >= since;
   const numbers = new Set(focus === 'all' ? open.map((i) => i.number) : focus);
   for (const i of open) if (recent(i) || i.labels.includes('ready')) numbers.add(i.number);
+  if (open.some((i) => i.labels.includes('ready'))) for (const i of open) if (i.labels.includes('needs-answer')) numbers.add(i.number);
   for (const i of closed) if (recent(i) && i.labels.some((l) => CLEANUP.includes(l))) numbers.add(i.number);
   const activeElsewhere = open.filter((i) => !numbers.has(i.number) && i.labels.some((l) => ACTIVE.includes(l))).length;
   return { numbers: [...numbers].sort((a, b) => a - b), activeElsewhere };

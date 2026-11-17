@@ -222,8 +222,7 @@ function handleNeedsAnswer(plan, view, facts, settings) {
   if (askChanged(facts)) return retriage(plan, facts);
   const from = ['needs-answer', 'needs-approval'].includes(waiting.from) ? 'triage' : waiting.from;
   plan.setState(from);
-  // D47: a resumed implementation waits for a free slot like a start from `ready`.
-  if (from === 'in-progress') plan.resumed = true;
+  // D22: an implementation kept its slot while it waited, so it goes on at once.
   plan.remember({ waiting: null, ask: facts.askDigest });
   plan.say.push(`The owner answered: back to ${code(from)}.`);
   return undefined;
@@ -337,8 +336,7 @@ function startAgent(plan, view, facts, ctx) {
       return;
     }
     if (facts.record.dorFailing) plan.remember({ dorFailing: null });
-    if ((state === 'ready' || plan.resumed) && !(ctx.queue || []).includes(view.number)) {
-      if (plan.resumed) plan.setState('ready');
+    if (state === 'ready' && !(ctx.queue || []).includes(view.number)) {
       plan.notes.push(`waits for a free implementation slot (${ctx.settings.parallelImplementations} at a time, lowest issue number first)`);
       return;
     }
@@ -403,15 +401,33 @@ function decideIssue(view, ctx) {
 
 const ACTIVE = ['in-progress', 'in-review'];
 
+// The record as it stands after the plan: a null value deletes the key.
+function recordAfter(s) {
+  const r = { ...s.facts.record };
+  for (const [k, v] of Object.entries(s.plan.record)) {
+    if (v === null) delete r[k];
+    else r[k] = v;
+  }
+  return r;
+}
+
+// D22: `in-progress` and `in-review` hold a slot, and so does a `needs-answer` issue that
+// returns to one of them.
+function holdsSlot(s) {
+  if (ACTIVE.includes(s.plan.state)) return true;
+  const waiting = s.plan.state === 'needs-answer' && recordAfter(s).waiting;
+  return Boolean(waiting && ACTIVE.includes(waiting.from));
+}
+
 // Decides every view in issue-number order, in two passes (D47): first every state moves,
-// then the free implementation slots go to the issues that are `ready` or resumed now,
-// lowest number first. `ctx.activeElsewhere` counts the active issues not among the views.
+// then the free implementation slots go to the `ready` issues, lowest number first.
+// `ctx.activeElsewhere` counts the slot holders not among the views.
 function decideAll(views, ctx) {
   const staged = [...views].sort((a, b) => a.number - b.number).map((v) => decideState(v, ctx));
   const live = staged.filter((s) => !s.final);
-  const active = Number(ctx.activeElsewhere || 0) + live.filter((s) => ACTIVE.includes(s.plan.state) && !s.plan.resumed).length;
+  const active = Number(ctx.activeElsewhere || 0) + live.filter(holdsSlot).length;
   const candidates = live
-    .filter((s) => s.plan.state === 'ready' || s.plan.resumed)
+    .filter((s) => s.plan.state === 'ready')
     .map((s) => ({ number: s.view.number, labels: [...s.plan.labels], record: { ...s.facts.record, ...s.plan.record }, dependencies: s.view.dependencies }));
   const queue = startableQueue(candidates, active, ctx.settings);
   for (const s of live) startAgent(s.plan, s.view, s.facts, { ...ctx, queue });
