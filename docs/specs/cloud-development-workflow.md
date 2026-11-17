@@ -81,7 +81,7 @@ Kept in one tracked settings file. Changing it is a `merge:human` change.
 
 | ID | Requirement |
 |---|---|
-| CW-40 | An issue that isn't `direct` becomes `ready` only by the owner adding `approved`. `approved` counts in `needs-approval`, and on a `direct` issue that waits only because of an objection; elsewhere the dispatcher removes it and comments when to approve. |
+| CW-40 | An issue that isn't `direct` becomes `ready` only by the owner adding `approved`. A newly added `approved` is accepted in `needs-approval`, and on a `direct` issue that waits only because of an objection; when newly added elsewhere, the dispatcher removes it and comments when to approve. Once accepted, approval is preserved across state transitions until explicitly revoked or invalidated by the workflow's approval-reset rules. |
 | CW-41 | `approved` on an issue with `objection` makes it `ready`; the dispatcher removes `objection` and comments "approved over objection". |
 | CW-42 | A change to the marked section after approval removes `approved` and returns the issue to `needs-approval`. |
 | CW-43 | When the owner closes an enhancement as not planned, an agent records it in `.out-of-scope/` in a `merge:self` pull request. Bugs and already-built features are never recorded. |
