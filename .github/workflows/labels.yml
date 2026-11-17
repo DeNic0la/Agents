@@ -9,6 +9,7 @@ on:
         default: false
 
 permissions:
+  contents: read # the checkout
   issues: write
 
 jobs:
