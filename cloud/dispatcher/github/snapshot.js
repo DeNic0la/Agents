@@ -55,6 +55,7 @@ function referencingPulls(raw, repo) {
 function mapIssue(issue) {
   return {
     number: issue.number,
+    title: issue.title || '',
     state: issue.state,
     stateReason: issue.state_reason || null,
     author: loginOf(issue.user),
@@ -114,4 +115,10 @@ async function listClosedSince(client, since) {
   return all.map(mapIssue).filter((i) => !i.isPull);
 }
 
-module.exports = { mapTimeline, referencingPulls, mapIssue, loadIssueView, listOpenIssues, listClosedSince };
+// Number, title and state of every issue, newest first, for triage's duplicate check.
+async function listIssueIndex(client, max = 500) {
+  const all = await client.paginate(`/repos/${client.repo}/issues?state=all&sort=created&direction=desc`);
+  return all.map(mapIssue).filter((i) => !i.isPull).slice(0, max).map(({ number, title, state }) => ({ number, title, state }));
+}
+
+module.exports = { mapTimeline, referencingPulls, mapIssue, loadIssueView, listOpenIssues, listClosedSince, listIssueIndex };

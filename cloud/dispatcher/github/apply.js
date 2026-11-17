@@ -19,6 +19,7 @@ function dryRunComment(plan) {
   if (plan.remove.length) lines.push(`- remove ${plan.remove.map(code).join(', ')}`);
   for (const s of plan.say) lines.push(`- comment: ${s}`);
   if (plan.start) lines.push(`- start the ${ROLE_NAMES[plan.start.role]} agent with a hard limit of ${usd(plan.start.limitUsd)}`);
+  if (plan.close) lines.push(`- close the issue as ${plan.close.replace('_', ' ')}`);
   for (const n of plan.notes) lines.push(`- start nothing: ${n}`);
   if (!lines.length) return null;
   return `**Dry run.** The dispatcher would:\n\n${lines.join('\n')}\n\n${formatDryRun(planHash(plan))}`;
@@ -46,6 +47,7 @@ function requestsFor(plan, mode, repo) {
   if (plan.add.length) out.push({ method: 'POST', path: `${base}/labels`, body: { labels: plan.add } });
   const body = liveComment(plan);
   if (body) out.push({ method: 'POST', path: `${base}/comments`, body: { body } });
+  if (plan.close) out.push({ method: 'PATCH', path: base, body: { state: 'closed', state_reason: plan.close } });
   return out;
 }
 
