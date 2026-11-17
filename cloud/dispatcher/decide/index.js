@@ -272,15 +272,17 @@ function checkApprovedSpec(plan, facts) {
   }
 }
 
-// CW-31, D94: the route became `full` after a lean spec was written. That spec lacks the
-// design and the steps, so the plan agent writes it again before anything is approved.
+// CW-31, D94: a `full` issue is built only from a spec the plan agent wrote. When the
+// route became `full` after a lean spec, or on a direct issue that has none, the plan
+// agent writes it before anything is approved. Only a recorded `specRoute: full` counts.
 function checkSpecRoute(plan, facts) {
   const from = facts.record.specRoute;
-  if (!from || from === 'full' || routeLabel(plan.labels) !== 'route:full') return false;
+  if (from === 'full' || routeLabel(plan.labels) !== 'route:full') return false;
   if (plan.has(L.APPROVED)) plan.removeLabel(L.APPROVED);
   plan.remember({ approvedSpec: null, specRoute: null });
   plan.setState('refining');
-  plan.say.push(`The route is \`route:full\` now, and the spec was written for the ${from} route: back to \`refining\` for the plan agent, which adds the design and the steps (CW-31).`);
+  const why = from ? `the spec was written for the ${from} route` : 'the plan agent has not written its spec';
+  plan.say.push(`The route is \`route:full\` now, and ${why}: back to \`refining\` for the plan agent, which adds the design and the steps (CW-31).`);
   return true;
 }
 
@@ -379,9 +381,13 @@ function closedByMerge(plan, view, facts, settings) {
 function handleState(plan, view, facts, settings) {
   switch (plan.state) {
     case 'needs-answer':
-      return handleNeedsAnswer(plan, view, facts, settings);
+      handleNeedsAnswer(plan, view, facts, settings);
+      // D94: an answer that returns the issue to `ready` is checked like any `ready` issue.
+      if (plan.state === 'ready') checkSpecRoute(plan, facts);
+      return undefined;
     case 'needs-approval':
-      if (checkSpecRoute(plan, facts)) return undefined;
+      // An edited request is triaged again first (handleNeedsApproval, D37).
+      if (!askChanged(facts) && checkSpecRoute(plan, facts)) return undefined;
       return handleNeedsApproval(plan, view, facts, settings);
     case 'triage':
     case 'refining':

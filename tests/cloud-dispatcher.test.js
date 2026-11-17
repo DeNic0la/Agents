@@ -188,6 +188,40 @@ test('D94: a lean spec on an issue whose route became full goes back to the plan
   assert.equal(planned.state, 'needs-approval');
 });
 
+test('D94: a ready issue raised to full without a recorded plan (direct, or an older spec) is planned first', () => {
+  const labels = ['origin:owner', 'merge:agent', 'route:full', 'ready', 'approved'];
+  const p = decide(view({ body: withSpec(), labels, timeline: [...labels.map((l) => ev.label(l, l === 'approved' ? OWNER : BOT)), ev.record({ ...TRIAGED, state: 'ready', approvedSpec: digest(SPEC) })] }), { queue: [1] });
+  assert.equal(p.state, 'refining');
+  assert.ok(p.remove.includes('approved'));
+  assert.equal(p.start.role, 'plan');
+  assert.match(p.say.join('\n'), /the plan agent has not written its spec/);
+});
+
+test('D94: an answer that returns a lean-spec issue now routed full to ready starts the plan agent, not the build', () => {
+  const labels = ['origin:owner', 'merge:agent', 'route:full', 'needs-answer', 'approved'];
+  const p = decide(view({
+    body: withSpec(),
+    labels,
+    timeline: [...labels.map((l) => ev.label(l, l === 'approved' ? OWNER : BOT)),
+      ev.record({ ...TRIAGED, state: 'needs-answer', specRoute: 'lean', approvedSpec: digest(SPEC), waiting: { from: 'ready', reason: 'question' } }),
+      ev.comment(OWNER, 'Go on.')],
+  }), { queue: [1] });
+  assert.equal(p.state, 'refining');
+  assert.ok(p.remove.includes('approved'));
+  assert.equal(p.start.role, 'plan');
+});
+
+test('D94, D37: an edited request in needs-approval is triaged again before the route change plans it', () => {
+  const labels = ['origin:owner', 'merge:agent', 'route:full', 'needs-approval'];
+  const p = decide(view({
+    body: withSpec(SPEC, 'Add a --dry-run flag to bin/agents sync and to bin/agents check.'),
+    labels,
+    timeline: [...labels.map((l) => ev.label(l, BOT)), ev.record({ ...TRIAGED, state: 'needs-approval', specRoute: 'lean' }), ev.comment(OWNER, 'Changed the request.')],
+  }));
+  assert.equal(p.state, 'triage');
+  assert.equal(p.start.role, 'triage');
+});
+
 test('CW-11: refining without a route starts nothing and says why', () => {
   const p = decide(view({ labels: ['origin:owner', 'refining'], timeline: [ev.label('origin:owner', BOT), ev.label('refining', BOT), ev.record({ ...TRIAGED, state: 'refining' })] }));
   assert.equal(p.start, null);
