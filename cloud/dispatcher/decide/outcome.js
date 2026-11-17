@@ -10,6 +10,7 @@ const { toNeedsAnswer, SESSION_RETRIES: RETRIES } = require('./index');
 const { routeLabel } = require('./ready');
 const { higher } = require('./merge-class');
 const { fence } = require('./task');
+const { SPEC_START, SPEC_END } = require('./spec');
 
 // Outcomes each role may report. `questions` and `objection` are shared.
 const OUTCOMES = {
@@ -23,6 +24,9 @@ const OUTCOMES = {
 };
 const MAX_FILED = 3; // CW-7
 const MAX_COMMENT = 60000; // GitHub's limit is 65536 characters; the dispatcher adds lines
+const MAX_SPEC = 40000; // leaves room for the owner's text in the same body
+// CW-30: the parts every spec has. Recommendations are optional.
+const SPEC_PARTS = [['the outcome', /\boutcome\b/i], ['what is out of scope', /\bout of scope\b/i], ['acceptance criteria', /\bacceptance criteria\b/i]];
 const usd = (n) => `$${Number(n).toFixed(2)}`;
 const code = (s) => `\`${s}\``;
 const round = (n) => Math.round(n * 100) / 100;
@@ -70,7 +74,12 @@ const NEEDS = {
     if (r.route === 'direct' && !isText(r.acceptanceCheck, 2000)) return '`direct` needs an `acceptanceCheck` (CW-27)';
     return null;
   },
-  spec: (r) => (isText(r.spec) && isUsd(r.estimateUsd) ? null : '`spec` and `estimateUsd` are required'),
+  spec: (r) => {
+    if (!isText(r.spec, MAX_SPEC) || !isUsd(r.estimateUsd)) return `\`spec\` (at most ${MAX_SPEC} characters) and \`estimateUsd\` are required`;
+    if (r.spec.includes(SPEC_START) || r.spec.includes(SPEC_END) || r.spec.includes('<!-- dispatcher-')) return '`spec` must not contain the section or record markers';
+    const missing = SPEC_PARTS.filter(([, re]) => !re.test(r.spec)).map(([name]) => name);
+    return missing.length ? `\`spec\` lacks ${missing.join(', ')} (CW-30)` : null;
+  },
   pushed: (r) => (isText(r.title, 256) && isText(r.body) ? null : '`title` and `body` of the pull request are required'),
   approve: (r) => (Array.isArray(r.items) ? null : '`items` is required'),
   changes: (r) => (Array.isArray(r.items) ? null : '`items` is required'),
@@ -95,13 +104,15 @@ function validateResult(role, r, number, settings) {
   return error ? { ok: false, error } : { ok: true, error: null };
 }
 
-// What the agent identity does on GitHub: its comment and the issues it opens. Split
-// issues name the issue they come from (CW-21); every one is `origin:agent` by author.
+// What the agent identity does on GitHub: the spec in the marked section (CW-8), its
+// comment and the issues it opens. Split issues name the issue they come from (CW-21);
+// every one is `origin:agent` by author.
 function agentActions(role, r, number) {
   const issues = (r.file || []).map((i) => ({ kind: 'file', title: i.title, body: i.body }));
   if (r.outcome === 'split') issues.push(...r.issues.map((i) => ({ kind: 'split', title: i.title, body: `${i.body.trim()}\n\nSplit from #${number}.` })));
   if (r.outcome === 'recommendations') issues.push(...(r.issues || []).map((i) => ({ kind: 'recommendation', title: i.title, body: i.body })));
-  return { comment: typeof r.comment === 'string' && r.comment.trim() ? r.comment : null, issues };
+  const spec = r.outcome === 'spec' ? r.spec.trim() : null;
+  return { spec, comment: typeof r.comment === 'string' && r.comment.trim() ? r.comment : null, issues };
 }
 
 const mergeLabel = (labels) => [...L.MERGES].reverse().find((m) => labels.has(m)) || null;
@@ -171,6 +182,27 @@ const TRIAGE = {
     return undefined;
   },
 };
+
+// The lean route's refine agent (phase 4); the full route's plan agent adds to it (phase 7).
+const REFINE = {
+  spec(plan, r, ctx) {
+    // The session job wrote the spec into the marked section before this runs.
+    if (!ctx.created.some((c) => c.kind === 'spec')) return fail(plan, ctx, 'the spec could not be written into the issue body');
+    plan.remember({ estimateUsd: r.estimateUsd });
+    plan.setState('needs-approval');
+    // Raised here, so the approval request names the class that applies; the later call is a no-op.
+    if (r.raiseMerge) raiseMerge(plan, r.raiseMerge, r.raiseReason.trim());
+    const route = routeLabel(plan.labels);
+    const merge = mergeLabel(plan.labels);
+    plan.say.push(`The spec is in this issue's marked section: route ${route ? code(route) : '(none)'}, merge class ${merge ? code(merge) : '(none)'}, estimate ${usd(r.estimateUsd)}. Add \`approved\` to build it as it stands now, or comment to have it revised (CW-34).`);
+    const cap = route ? capOf(L.routeOf(route), ctx.settings) : undefined;
+    if (Number.isFinite(cap) && r.estimateUsd > cap && !plan.has(L.BUDGET_EXTEND)) {
+      plan.say.push(`The estimate is above the ${L.routeOf(route)} cap of ${usd(cap)}, so it starts only with \`budget:extend\` as well (Definition of Ready, item 7).`);
+    }
+    return undefined;
+  },
+};
+const HANDLERS = { triage: TRIAGE, refine: REFINE };
 
 const SHARED = {
   questions(plan, r, ctx) {
@@ -243,7 +275,7 @@ function dispatcherOutcome({ role, view, record = {}, session, text, created = [
 
   if (r) {
     if (record.failures) plan.remember({ failures: null });
-    const handler = (role === 'triage' && TRIAGE[r.outcome]) || SHARED[r.outcome];
+    const handler = (HANDLERS[role] && HANDLERS[role][r.outcome]) || SHARED[r.outcome];
     // Later phases add the other roles' outcomes; until then the owner decides.
     if (handler) handler(plan, r, ctx);
     else toNeedsAnswer(plan, state, `the dispatcher can't act on the ${role} outcome ${code(r.outcome)} yet`, 'Not built yet.');

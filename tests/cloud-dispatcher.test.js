@@ -742,3 +742,35 @@ test('CW-16, D54: a session the dispatcher requested whose run is gone counts as
   assert.equal(running.start, null);
   assert.equal(running.record.failures, undefined);
 });
+
+// ---- Phase 4: refinement, questions and approval ----------------------------------------
+
+test('Scenario 6, CW-32, CW-35: a refine question waits for the owner, then the refine agent continues', () => {
+  const labels = ['origin:owner', 'route:lean', 'merge:agent', 'needs-answer'];
+  const base = [...labels.map((l) => ev.label(l, BOT)), ev.record({ ...TRIAGED, state: 'needs-answer', waiting: { from: 'refining', reason: 'question' } })];
+  const quiet = decide(view({ labels, timeline: base }));
+  assert.ok(quiet.isEmpty, JSON.stringify(quiet.visible));
+  const others = decide(view({ labels, timeline: [...base, ev.comment(STRANGER, 'Use Rust.'), ev.comment(AGENT, 'Also this.')] }));
+  assert.ok(others.isEmpty, JSON.stringify(others.visible));
+  const answered = decide(view({ labels, timeline: [...base, ev.comment(OWNER, 'Yes, as recommended.')] }));
+  assert.equal(answered.state, 'refining');
+  assert.deepEqual(answered.start, { role: 'refine', limitUsd: 8 });
+});
+
+test('CW-34, CW-35: a spec waiting for approval goes back to refining on the owner\'s comment only', () => {
+  const labels = ['origin:owner', 'route:lean', 'merge:agent', 'needs-approval'];
+  const base = [...labels.map((l) => ev.label(l, BOT)), ev.record({ ...TRIAGED, state: 'needs-approval', estimateUsd: 4 })];
+  const stranger = decide(view({ body: withSpec(), labels, timeline: [...base, ev.comment(STRANGER, 'Approve it!')] }));
+  assert.ok(stranger.isEmpty, JSON.stringify(stranger.visible));
+  const owner = decide(view({ body: withSpec(), labels, timeline: [...base, ev.comment(OWNER, 'Drop the second criterion.')] }));
+  assert.equal(owner.state, 'refining');
+  assert.equal(owner.start.role, 'refine');
+});
+
+test('DoR 7: the spec\'s estimate replaces triage\'s once there is one', () => {
+  const issue = (record) => ({ labels: ['route:lean', 'merge:agent', 'approved', 'ready'], record: { triage: { estimateUsd: 3 }, ...record } });
+  assert.equal(checkReady(issue({}), settings()).ok, true);
+  assert.deepEqual(checkReady(issue({ estimateUsd: 9 }), settings()).failing.map((f) => f.item), [7]);
+  assert.equal(checkReady(issue({ estimateUsd: 2, triage: { estimateUsd: 9 } }), settings()).ok, true);
+  assert.deepEqual(checkReady(issue({ triage: {} }), settings()).failing.map((f) => f.item), [7]);
+});

@@ -140,7 +140,7 @@ function toNeedsAnswer(plan, from, reason, text) {
 function intake(plan, view, facts, reopened) {
   if (plan.has(L.APPROVED)) plan.removeLabel(L.APPROVED);
   if (reopened) L.ROUTES.forEach((r) => plan.removeLabel(r));
-  plan.remember({ intake: true, ask: facts.askDigest, triage: null, approvedSpec: null, waiting: null, dorFailing: null });
+  plan.remember({ intake: true, ask: facts.askDigest, triage: null, estimateUsd: null, approvedSpec: null, waiting: null, dorFailing: null });
   const prefix = reopened ? 'Reopened: triaged as a new issue, without `approved`.' : '';
   if (plan.has(L.ORIGIN.external)) {
     toNeedsAnswer(plan, 'triage', 'external', `${prefix} Thanks for the issue.`.trim());
@@ -154,7 +154,7 @@ function intake(plan, view, facts, reopened) {
 function retriage(plan, facts) {
   plan.removeLabel(L.APPROVED);
   plan.setState('triage');
-  plan.remember({ ask: facts.askDigest, triage: null, approvedSpec: null, waiting: null, dorFailing: null });
+  plan.remember({ ask: facts.askDigest, triage: null, estimateUsd: null, approvedSpec: null, waiting: null, dorFailing: null });
   plan.say.push('The request changed: triaged again, without `approved`.');
 }
 
@@ -162,7 +162,7 @@ function retriage(plan, facts) {
 // The owner decides again, so an outsider's edits never start a session by themselves.
 function externalEdit(plan, facts) {
   plan.removeLabel(L.APPROVED);
-  plan.remember({ ask: facts.askDigest, triage: null, approvedSpec: null, dorFailing: null });
+  plan.remember({ ask: facts.askDigest, triage: null, estimateUsd: null, approvedSpec: null, dorFailing: null });
   toNeedsAnswer(plan, 'triage', 'external', 'The request changed after the owner let it in.');
 }
 

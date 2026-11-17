@@ -15,6 +15,7 @@ const { readFacts, ROLE_FOR_STATE } = require('./decide');
 const { Plan } = require('./decide/plan');
 const L = require('./decide/labels');
 const { taskMessage } = require('./decide/task');
+const { withSpec } = require('./decide/spec');
 const { agentActions, dispatcherOutcome, parseResult, validateResult, scrubSecrets } = require('./decide/outcome');
 const { parseDefinition } = require('./platform/sync');
 const { createPlatformClient } = require('./platform/client');
@@ -23,6 +24,7 @@ const { runSession } = require('./platform/session');
 const { loadSettings } = require('./cli');
 
 const AGENTS_DIR = path.join(__dirname, '..', 'agents');
+const MAX_BODY = 65536; // GitHub's limit for an issue body
 
 // Why this run starts nothing, or null when the issue still asks for this role.
 function skipReason(view, record, role) {
@@ -79,6 +81,19 @@ async function runForIssue({ issue, role, settings, gh, agentClient, platform, m
   if (!stale && parsed.ok && validateResult(role, parsed.result, issue, settings).ok) {
     const agent = await agentClient(await mint());
     const actions = agentActions(role, parsed.result, issue);
+    let specFailed = false;
+    if (actions.spec) {
+      // CW-8: only the marked section changes; the body is the one just read.
+      try {
+        const body = withSpec(view.body, actions.spec);
+        if (body.length > MAX_BODY) throw new Error(`the body would be ${body.length} characters, over GitHub's ${MAX_BODY}`);
+        await agent.request('PATCH', `/repos/${agent.repo}/issues/${issue}`, { body });
+        created.push({ kind: 'spec' });
+      } catch (err) {
+        specFailed = true;
+        log(`::warning::Could not write the spec into #${issue}: ${scrubSecrets(err.message, tokens)}`);
+      }
+    }
     for (const i of actions.issues) {
       try {
         const made = await agent.request('POST', `/repos/${agent.repo}/issues`, { title: i.title, body: i.body });
@@ -87,7 +102,8 @@ async function runForIssue({ issue, role, settings, gh, agentClient, platform, m
         log(`::warning::Could not open the issue "${i.title}": ${scrubSecrets(err.message, tokens)}`);
       }
     }
-    if (actions.comment) await agent.request('POST', `/repos/${agent.repo}/issues/${issue}/comments`, { body: actions.comment });
+    // An approval request without its spec would ask for approval of nothing.
+    if (actions.comment && !specFailed) await agent.request('POST', `/repos/${agent.repo}/issues/${issue}/comments`, { body: actions.comment });
   }
   const { plan } = dispatcherOutcome({ role, view, record: facts.record, session, text: session.text, created, settings, stale });
   plan.remember({ session: null });

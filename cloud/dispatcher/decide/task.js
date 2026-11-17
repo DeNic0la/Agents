@@ -6,6 +6,7 @@
 
 const { actorKind } = require('./actors');
 const { routeLabel } = require('./ready');
+const { splitBody } = require('./spec');
 
 const MAX_TEXT = 20000; // per body or comment; a session's first message has a size limit
 const MARKER_RE = /<!-- dispatcher-(record|dry-run) [\s\S]*? -->/g;
@@ -28,7 +29,7 @@ const who = (login, settings) => `${KIND[actorKind(login, settings)]} (${login |
 
 const ROLE_TASK = {
   triage: 'Triage this issue: decide its route, merge class and cost, or end in one of the other triage outcomes.',
-  refine: 'Refine this issue into a spec for the marked section of its body, or ask the questions that block it.',
+  refine: 'Refine this issue into a spec for the marked section of its body, or ask the questions that block it. If it has a spec already, revise it from the owner\'s comments since.',
   plan: 'Plan this issue on the full route: write the spec and the plan for the marked section of its body.',
   implement: 'Implement this issue\'s approved spec on its branch and push it.',
   review: 'Review the pull request for this issue against its spec and the Definition of Done.',
@@ -46,6 +47,7 @@ function capsLine(settings) {
 function taskMessage({ role, view, record = {}, settings, limitUsd, branch = 'main', issues = [], sections = [] }) {
   const labels = view.labels || [];
   const route = routeLabel(new Set(labels));
+  const { ask, spec } = splitBody(view.body);
   const lines = [
     `# Task: ${role} for issue #${view.number}`,
     '',
@@ -70,10 +72,12 @@ function taskMessage({ role, view, record = {}, settings, limitUsd, branch = 'ma
     '',
     fence(clip(view.title)),
     '',
-    `Body, written by ${who(view.author, settings)}:`,
+    `Body, written by ${who(view.author, settings)}${spec == null ? '' : ', without its marked section'}:`,
     '',
-    fence(clip(view.body)),
+    fence(clip(ask)),
   );
+  // CW-8: agents write the marked section; the owner may have edited it since.
+  if (spec != null) lines.push('', '## Current spec, from the marked section of the body', '', fence(clip(spec)));
 
   const comments = (view.timeline || []).filter((e) => e.type === 'commented');
   lines.push('', `## Comments, oldest first (${comments.length})`);
