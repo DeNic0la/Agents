@@ -342,9 +342,25 @@ function budgetReached(plan, ctx) {
   if (ctx.role === 'triage') {
     return toNeedsAnswer(plan, 'triage', 'the triage reached its per-run cap (CW-87)', 'Triage stopped at its cap.');
   }
+  if (monthBound(plan, ctx)) {
+    // CW-83: the month, not the issue's cap, set this limit. No `paused`: the agent starts
+    // again when the month allows (its turn, or a raised cap).
+    plan.say.push(`Stopped at what was left of the month: this issue has cost ${usd(ctx.spentUsd)} so far and is still within its cap. It continues when the month allows (CW-83).`);
+    return undefined;
+  }
   plan.addLabel(L.PAUSED);
   plan.say.push(`Paused at the cap: this issue has cost ${usd(ctx.spentUsd)} so far. Add \`budget:extend\` to allow one more cap (CW-82).`);
   return undefined;
+}
+
+// The session's hard limit was below what the issue's cap still allowed when it started,
+// so the month bounded it (the dispatcher's hardLimit). Unknown counts as the issue's cap.
+function monthBound(plan, ctx) {
+  const request = ctx.record.session;
+  const route = routeLabel(plan.labels);
+  if (!request || !route || !Number.isFinite(Number(request.limitUsd))) return false;
+  const capLeft = capOf(L.routeOf(route), ctx.settings, ctx.record) - Number(ctx.record.spentUsd || 0);
+  return Number(request.limitUsd) < Math.floor(capLeft * 100) / 100;
 }
 
 const PHASE_ERRORS = {

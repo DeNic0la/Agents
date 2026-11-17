@@ -503,10 +503,11 @@ function startAgent(plan, view, facts, ctx) {
   const left = monthLeft(ctx);
   // CW-83: at the monthly cap nothing starts; labels stay, and the next run after the turn
   // of the month or a raised cap starts it.
-  if (left !== null && !(roundCents(left) > 0)) return plan.notes.push(`the monthly cap of $${Number(ctx.settings.caps.monthlyUsd).toFixed(2)} is reached`);
+  // What a session can't use (the request margin) counts as nothing left.
+  const margin = Number(ctx.settings.platform && ctx.settings.platform.requestMarginUsd) || 0;
+  if (left !== null && !(roundCents(left) > margin)) return plan.notes.push(`the monthly cap of $${Number(ctx.settings.caps.monthlyUsd).toFixed(2)} is reached`);
   const limitUsd = hardLimit(role, plan, extend ? { ...record, extensions: Number(record.extensions || 0) + 1 } : record, ctx);
-  if (!(limitUsd > 0)) return plan.notes.push('nothing is left of the cap for this session');
-  if (extend) useExtension(plan, record, ctx.settings);
+  if (!(limitUsd > margin)) return plan.notes.push('nothing is left of the cap for this session');
   // The dispatcher requested a session and no run of it is active any more: the run ended
   // without reporting (a crash or a time-out of the job). CW-16 counts it as a failure.
   const lost = facts.record.session;
@@ -520,6 +521,8 @@ function startAgent(plan, view, facts, ctx) {
     plan.remember({ failures });
     plan.say.push(`The ${lost.role} session run ended without a result. Retrying once.`);
   }
+  // Used only when a session does start.
+  if (extend) useExtension(plan, record, ctx.settings);
   plan.start = { role, limitUsd };
   if (state === 'ready') plan.setState('in-progress');
   return undefined;

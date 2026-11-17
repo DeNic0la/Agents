@@ -22,8 +22,10 @@ const { loadSettings } = require('./cli');
 const POLL_MS = 5000;
 const RUN_CANCEL_WAIT_MS = 90000; // how long cancelled runs get to end before the platform is touched
 const STOP_GRACE_MS = 120000; // how long an interrupted session gets to go idle
-// Sessions older than the longest a session may run can't be part of an open request.
-const recentEnough = (settings, now) => (s) => now() - Date.parse(s.created_at || 0) < (Number(settings.platform.sessionTimeoutMinutes) + 60) * 60000;
+// An ended session older than the longest a session may run can't be part of an open
+// request. A running one is kept at any age: its job may have died without stopping it.
+const recentEnough = (settings, now) => (s) => sessionPhase(s) === 'running'
+  || now() - Date.parse(s.created_at || 0) < (Number(settings.platform.sessionTimeoutMinutes) + 60) * 60000;
 
 // The platform's agent sessions of every role, newest first, mapped to { id, issue, role, createdAt, raw }.
 async function agentSessions(platform, settings, now) {
@@ -34,7 +36,7 @@ async function agentSessions(platform, settings, now) {
     const sessions = (await platform.listSessions({ agentId: agent.id })).filter(recentEnough(settings, now));
     for (const s of sessions) {
       const meta = s.metadata || {};
-      out.push({ id: s.id, issue: meta.issue, role: meta.role || names.get(agent.name), createdAt: s.created_at, raw: s });
+      out.push({ id: s.id, issue: meta.issue, role: meta.role || names.get(agent.name), request: meta.request, createdAt: s.created_at, raw: s });
     }
   }
   return out;
@@ -131,8 +133,10 @@ async function stopAll({ gh, platform, settings, now = Date.now, sleep = (ms) =>
     const mine = sessionsFor(view.number, record.session, sessions);
     for (const s of mine) matched.add(s.id);
     const link = (id) => settings.platform.sessionLink.replace('{id}', id);
-    const plan = stoppedPlan(view, record, mine.map((s) => ({ id: s.id, link: link(s.id), ...(ended.get(s.id) || { running: false, costUsd: costUsd(s.raw) }) })));
-    await applyPlan(gh, plan, settings.mode);
+    const plan = stoppedPlan(view, record, mine.map((s) => ({ id: s.id, link: link(s.id), ...(ended.get(s.id) || { running: false, costUsd: costUsd(s.raw) }) })), { unchecked: !platform });
+    // A request is only recorded by a live run, and the stop really ended its session: the
+    // cost and the cleared request are written even if the owner switched to dry run since.
+    await applyPlan(gh, plan, 'live');
     report.issues.push(view.number);
   }
   // A session no open request accounts for: interrupted all the same, named in the summary.

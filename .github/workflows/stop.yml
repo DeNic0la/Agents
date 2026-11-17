@@ -9,11 +9,14 @@ on:
   workflow_dispatch:
 
 # actions: write to disable workflows and cancel their runs; issues: write for the cost
-# comments. The platform key interrupts the sessions.
+# comments; pull-requests and checks: read for the issue views (linked pull requests, their
+# files and CI). The platform key interrupts the sessions.
 permissions:
   contents: read
   issues: write
   actions: write
+  pull-requests: read
+  checks: read
 
 concurrency:
   group: stop-resume

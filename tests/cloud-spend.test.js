@@ -181,6 +181,54 @@ test('CW-84: the stop matches platform sessions to the issue\'s open request by 
     { id: 'd', issue: '6', role: 'implement', createdAt: '2026-11-17T10:01:00Z' },
   ];
   assert.deepEqual(sessionsFor(5, request, sessions).map((s) => s.id), ['a']);
+  // A session that names its request matches only that request, even inside the clock skew:
+  // an earlier request's session, ended and recorded at 10:01, is not counted again.
+  const named = [
+    { id: 'old', issue: '5', role: 'implement', request: '2026-11-17T09:58:00Z', createdAt: '2026-11-17T09:58:30Z' },
+    { id: 'new', issue: '5', role: 'implement', request: request.at, createdAt: '2026-11-17T10:00:30Z' },
+  ];
+  assert.deepEqual(sessionsFor(5, request, named).map((s) => s.id), ['new']);
+});
+
+test('CW-84, CW-16: a session the stop could not confirm stopped, or could not check, waits for the owner', () => {
+  const v = { number: 5, labels: ['in-progress', 'route:lean'] };
+  const record = { totalUsd: 2, spentUsd: 2, session: { role: 'implement', limitUsd: 6, at: 'x' } };
+  const stuck = stoppedPlan(v, record, [{ id: 's2', link: 'L2', costUsd: 3, running: true }]);
+  assert.equal(stuck.state, 'needs-answer');
+  assert.equal(stuck.record.waiting.from, 'in-progress');
+  assert.equal(stuck.record.sessionCostUsd, 3);
+  assert.doesNotMatch(stuck.say.join('\n'), /the agent for the state starts again/);
+  const unchecked = stoppedPlan(v, record, [], { unchecked: true });
+  assert.equal(unchecked.state, 'needs-answer');
+  assert.match(unchecked.say.join('\n'), /no platform key/);
+  assert.doesNotMatch(unchecked.say.join('\n'), /before its session started/);
+});
+
+test('CW-83: a budget stop the month set does not pause the issue; one the issue\'s cap set does', () => {
+  const run = (limitUsd) => dispatcherOutcome({
+    role: 'implement', view: { number: 1, labels: [...BUILDING] }, record: { ...TRIAGED, state: 'in-progress', spentUsd: 1, session: { role: 'implement', limitUsd, at: 'x' } },
+    session: { id: 's1', link: 'l', phase: 'budget', costUsd: limitUsd }, text: '', settings,
+  }).plan;
+  const month = run(3);
+  assert.ok(!month.add.includes('paused'));
+  assert.equal(month.state, 'in-progress');
+  assert.match(month.say.join('\n'), /Stopped at what was left of the month: this issue has cost \$4\.00 so far/);
+  assert.ok(run(7).add.includes('paused'));
+});
+
+test('CW-83: a month with no more left than the request margin starts nothing', () => {
+  const s = { ...settings, platform: { ...settings.platform, requestMarginUsd: 0.15 } };
+  const p = decideIssue(view({ labels: ['origin:owner', 'triage'], record: { state: 'triage' } }), ctx({ settings: s, spend: { monthUsd: 99.9, reservedUsd: 0 } }));
+  assert.equal(p.start, null);
+  assert.match(p.notes.join(' '), /monthly cap of \$100\.00 is reached/);
+});
+
+test('CW-82, CW-16: budget:extend is not used when a lost session sends the issue to the owner', () => {
+  const p = decideIssue(view({ labels: [...BUILDING, 'paused', 'budget:extend'], record: { state: 'in-progress', spentUsd: 8, failures: 1, session: { role: 'implement', limitUsd: 4, at: 'x' } } }), ctx());
+  assert.equal(p.start, null);
+  assert.equal(p.state, 'needs-answer');
+  assert.ok(!p.remove.includes('budget:extend'));
+  assert.ok(!('extensions' in p.record));
 });
 
 test('CW-84, CW-85: the stopped issue records the cost and clears the request, so resuming counts no failure', () => {
@@ -270,6 +318,35 @@ test('CW-84: without the platform key the stop still turns everything off and cl
   assert.equal(report.disabled.length, STOPPABLE_WORKFLOWS.length);
   assert.deepEqual(report.issues, [5]);
   assert.ok(lines.some((l) => /ANTHROPIC_API_KEY is not set/.test(l)));
+});
+
+test('CW-84, CW-85: in dry run the stop still records the cost and clears the request', async () => {
+  const gh = fakeGitHub();
+  let t = Date.parse('2026-11-17T11:00:00Z');
+  await stopAll({ gh, platform: fakePlatform(), settings: { ...settings, mode: 'dry-run' }, now: () => t, sleep: async (ms) => { t += ms; }, log: () => {} });
+  const comment = gh.calls.find(([m, p]) => m === 'POST' && p === '/repos/o/r/issues/5/comments');
+  assert.match(comment[2].body, /"sessionCostUsd":1\.5/);
+  assert.doesNotMatch(comment[2].body, /Dry run/);
+});
+
+test('CW-84: the stop interrupts a running session of any age, and skips old ended ones', async () => {
+  const gh = fakeGitHub();
+  const old = '2026-11-01T00:00:00Z';
+  const sessions = {
+    s_stale: { id: 's_stale', status: 'running', metadata: { issue: '9', role: 'implement' }, created_at: old, usage: { list_cost: { amount: '50' } } },
+    s_done: { id: 's_done', status: 'idle', stop_reason: { type: 'end_turn' }, metadata: { issue: '9', role: 'implement' }, created_at: old },
+  };
+  const interrupts = [];
+  const platform = {
+    listAgents: async () => [{ id: 'ag', name: 'agents-implement' }],
+    listSessions: async () => Object.values(sessions),
+    interrupt: async (id) => { interrupts.push(id); sessions[id] = { ...sessions[id], status: 'idle', stop_reason: { type: 'end_turn' } }; },
+    getSession: async (id) => sessions[id],
+  };
+  let t = Date.parse('2026-11-17T11:00:00Z');
+  const report = await stopAll({ gh, platform, settings, now: () => t, sleep: async (ms) => { t += ms; }, log: () => {} });
+  assert.deepEqual(interrupts, ['s_stale']);
+  assert.deepEqual(report.unmatched, ['s_stale']);
 });
 
 test('CW-84: resume turns the workflows on and starts a full reconcile', async () => {
