@@ -11,8 +11,12 @@
 // USAGE_PACE_RESERVE: percent of the weekly limit to keep for the last day (default 10).
 // USAGE_PACE_WEEKDAYS: the prior weekday weights, Monday first (default 1,1,1,1,1,0.2,0.2).
 // USAGE_PACE_COMPACT=1: shorter labels, e.g. "wk 23/30% ▲~19%/wd (today 4%) · →Fri 14:00".
+// Prompt line: when oh-my-posh and its theme are there, its "claude" line goes above the usage line.
+// USAGE_PACE_OMP_CONFIG: the theme (default ~/toolbox/oh-my-posh/default.omp.json, the DeNic0la/toolbox
+// theme); "off" leaves the line out. USAGE_PACE_OMP_BIN: the oh-my-posh program (default "oh-my-posh").
 'use strict';
 const fs = require('fs'), os = require('os'), path = require('path');
+const { spawnSync } = require('child_process');
 const { DAY, WEEK, parseWeekdays, weekdayWeights, paceLine, advise } = require('./weekly-pace.js');
 
 const configDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
@@ -123,12 +127,32 @@ function render(input) {
   return parts.join(' · ');
 }
 
-let data = '';
-process.stdin.on('data', c => (data += c));
-process.stdin.on('end', () => {
-  let input = {};
-  try { input = JSON.parse(data || '{}'); } catch {}
-  let line = '';
-  try { line = render(input); } catch {}
-  process.stdout.write(line);
-});
+// oh-my-posh writes OSC sequences for the window title and shell integration; a status line keeps only
+// the text and its colours.
+function cleanPrompt(out) {
+  return String(out || '').replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '').split(/\r?\n/)
+    .map(l => l.replace(/\s+$/, '')).filter(l => l.replace(/\x1b\[[0-9;]*m/g, '').trim()).join('\n');
+}
+
+function promptLine(raw, env = process.env) {
+  const config = env.USAGE_PACE_OMP_CONFIG || path.join(os.homedir(), 'toolbox', 'oh-my-posh', 'default.omp.json');
+  if (config === 'off' || !fs.existsSync(config)) return '';
+  const r = spawnSync(env.USAGE_PACE_OMP_BIN || 'oh-my-posh', ['claude', '--config', config],
+    { input: raw, encoding: 'utf8', timeout: 2000, windowsHide: true });
+  return r.status === 0 ? cleanPrompt(r.stdout) : '';
+}
+
+if (require.main === module) {
+  let data = '';
+  process.stdin.on('data', c => (data += c));
+  process.stdin.on('end', () => {
+    let input = {};
+    try { input = JSON.parse(data || '{}'); } catch {}
+    let line = '', prompt = '';
+    try { line = render(input); } catch {}
+    try { prompt = promptLine(data || '{}'); } catch {}
+    process.stdout.write([prompt, line].filter(Boolean).join('\n'));
+  });
+}
+
+module.exports = { cleanPrompt };
