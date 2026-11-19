@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: Use when a change needs a review before it merges - a branch, a pull request, work in progress, "review since <commit>", "review this before I merge", "is this code safe?" - or when another skill asks to review the changes since a fixed point against a spec. Reviews the diff for spec fit, correctness, security, performance and standards, and ends on a coded verdict.
+description: Use when a change needs a review before it merges - a branch, a pull request, work in progress, "review since that commit", "review this before I merge", "is this code safe?" - or when another skill asks to review the changes since a fixed point against a spec. Reviews the diff for spec fit, correctness, security, performance and standards, and ends on a coded verdict.
 ---
 
 # Code Review

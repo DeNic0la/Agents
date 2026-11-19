@@ -28,6 +28,25 @@ test('CW-101: every real file in cloud/agents parses and its role matches the fi
   }
 });
 
+// The platform rejects a skill (400 on /v1/skills) whose name or description holds an XML tag
+// or the reserved words "anthropic" or "claude", so a placeholder like `<commit>` breaks the sync.
+test('CW-101: every skill a cloud agent uploads has a name and description the platform accepts', () => {
+  const dir = path.join(root, 'cloud/agents');
+  const skills = new Set(fs.readdirSync(dir).filter((f) => f.endsWith('.md') && f !== 'README.md')
+    .flatMap((f) => sync.parseDefinition(fs.readFileSync(path.join(dir, f), 'utf8'), f).skills));
+  assert.ok(skills.size > 0);
+  for (const name of skills) {
+    const text = fs.readFileSync(path.join(root, 'preset/skills', name, 'SKILL.md'), 'utf8');
+    const front = text.split(/\r?\n---/)[0];
+    for (const key of ['name', 'description']) {
+      const value = (front.match(new RegExp(`^${key}:(.*)$`, 'm')) || [])[1] || '';
+      assert.ok(value.trim(), `${name}: no ${key}`);
+      assert.doesNotMatch(value, /<\/?[A-Za-z][^>]*>/, `${name}: ${key} holds an XML tag`);
+      assert.doesNotMatch(value, /anthropic|claude/i, `${name}: ${key} holds a reserved word`);
+    }
+  }
+});
+
 test('CW-20, CW-23, CW-100: the triage agent runs at the deep tier and names the full-route triggers', () => {
   const text = fs.readFileSync(path.join(root, 'cloud/agents/triage.md'), 'utf8');
   const def = sync.parseDefinition(text, 'triage.md');
