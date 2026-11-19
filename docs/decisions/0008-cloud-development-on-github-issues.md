@@ -1,6 +1,6 @@
 # 0008 Development runs in the cloud, on GitHub issues
 
-- **Status:** accepted, planned (see [development-workflow.md](../development-workflow.md) and [specs/cloud-development-workflow.md](../specs/cloud-development-workflow.md))
+- **Status:** accepted, built; it runs once the owner's setup steps in the [build plan](../specs/cloud-development-workflow-build.md#what-the-owner-does-by-hand) are done (see [development-workflow.md](../development-workflow.md) and [specs/cloud-development-workflow.md](../specs/cloud-development-workflow.md))
 
 ## Context
 

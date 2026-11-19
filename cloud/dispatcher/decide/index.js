@@ -25,6 +25,7 @@ const { unsetCaps } = require('./settings');
 const { issueCap } = require('./spend');
 const { Plan } = require('./plan');
 const { mergeClassCheck, mergeLabelOf, closingComment } = require('./merge');
+const { pendingRejection } = require('./rejection');
 
 const ROLE_FOR_STATE = { triage: 'triage', refining: 'refine', ready: 'implement', 'in-progress': 'implement', 'in-review': 'review' };
 // CW-23, CW-31: on the full route the plan agent refines the issue instead (D93).
@@ -32,8 +33,10 @@ function roleFor(state, labels) {
   const route = routeLabel(labels instanceof Set ? labels : new Set(labels || []));
   return state === 'refining' && route === 'route:full' ? 'plan' : ROLE_FOR_STATE[state];
 }
-// Every role a session job starts.
-const ROLES = [...new Set([...Object.values(ROLE_FOR_STATE), 'plan'])];
+// Every role a session job starts. `record` runs on a closed issue (CW-43).
+const ROLES = [...new Set([...Object.values(ROLE_FOR_STATE), 'plan', 'record'])];
+// Roles that run on the triage per-run cap instead of the issue's cap (CW-87, D114).
+const PER_RUN_ROLES = ['triage', 'record'];
 // Only the owner and the dispatcher change these. Merge labels are guarded against
 // removal only: any agent may raise a class (CW-67).
 const GUARDED = [L.APPROVED, L.BUDGET_EXTEND, L.PAUSED, ...L.ORIGINS, ...L.STATES];
@@ -369,6 +372,9 @@ function checkRoundPassed(plan, view, facts, settings) {
 // A merge by anyone else gets none.
 function closedByMerge(plan, view, facts, settings) {
   const pr = view.pull;
+  // CW-43: a record pull request's merge closes nothing; its issue was closed by the owner.
+  const rejection = facts.record.rejection;
+  if (pr && rejection && rejection.pull === pr.number) return;
   const m = facts.record.merged;
   if (m && m.by === 'agent' && m.commented === false) {
     plan.say.push(closingComment({ pull: m.pull, title: pr && pr.number === m.pull ? pr.title : '', by: 'agent', record: facts.record }));
@@ -424,7 +430,7 @@ const roundCents = (usd) => Math.floor(usd * 100) / 100;
 function hardLimit(role, plan, record, ctx) {
   const caps = ctx.settings.caps;
   let limit;
-  if (role === 'triage') limit = caps.perRunUsd.triage;
+  if (PER_RUN_ROLES.includes(role)) limit = caps.perRunUsd.triage;
   else {
     const route = routeLabel(plan.labels);
     if (!route) return null;
@@ -457,6 +463,25 @@ function useExtension(plan, record, settings) {
 }
 
 const SESSION_RETRIES = 1; // CW-16: one retry, then the owner
+
+// The hard limit a new session gets, or null with a note when the caps let none start.
+function sessionLimit(plan, role, record, ctx) {
+  const unset = unsetCaps(ctx.settings);
+  if (unset.length) return note(plan, `no session starts while caps are unset: ${unset.join(', ')}`);
+  const left = monthLeft(ctx);
+  // CW-83: at the monthly cap nothing starts; labels stay, and the next run after the turn
+  // of the month or a raised cap starts it.
+  // What a session can't use (the request margin) counts as nothing left.
+  const margin = Number(ctx.settings.platform && ctx.settings.platform.requestMarginUsd) || 0;
+  if (left !== null && !(roundCents(left) > margin)) return note(plan, `the monthly cap of $${Number(ctx.settings.caps.monthlyUsd).toFixed(2)} is reached`);
+  const limitUsd = hardLimit(role, plan, record, ctx);
+  if (!(limitUsd > margin)) return note(plan, 'nothing is left of the cap for this session');
+  return limitUsd;
+}
+const note = (plan, text) => {
+  plan.notes.push(text);
+  return null;
+};
 
 // CW-11, CW-12, CW-14, CW-80, CW-84: which agent the state calls for, if it may start.
 function startAgent(plan, view, facts, ctx) {
@@ -497,17 +522,9 @@ function startAgent(plan, view, facts, ctx) {
   // Triage runs on its per-run cap, so an extension waits for the agent that uses the issue's.
   const extend = role !== 'triage' && plan.has(L.BUDGET_EXTEND);
   if (plan.has(L.PAUSED) && !extend) return plan.notes.push('the issue is `paused` at its cap; `budget:extend` continues it');
-  const unset = unsetCaps(ctx.settings);
-  if (unset.length) return plan.notes.push(`no session starts while caps are unset: ${unset.join(', ')}`);
   const record = { ...facts.record, ...plan.record };
-  const left = monthLeft(ctx);
-  // CW-83: at the monthly cap nothing starts; labels stay, and the next run after the turn
-  // of the month or a raised cap starts it.
-  // What a session can't use (the request margin) counts as nothing left.
-  const margin = Number(ctx.settings.platform && ctx.settings.platform.requestMarginUsd) || 0;
-  if (left !== null && !(roundCents(left) > margin)) return plan.notes.push(`the monthly cap of $${Number(ctx.settings.caps.monthlyUsd).toFixed(2)} is reached`);
-  const limitUsd = hardLimit(role, plan, extend ? { ...record, extensions: Number(record.extensions || 0) + 1 } : record, ctx);
-  if (!(limitUsd > margin)) return plan.notes.push('nothing is left of the cap for this session');
+  const limitUsd = sessionLimit(plan, role, extend ? { ...record, extensions: Number(record.extensions || 0) + 1 } : record, ctx);
+  if (limitUsd === null) return undefined;
   // The dispatcher requested a session and no run of it is active any more: the run ended
   // without reporting (a crash or a time-out of the job). CW-16 counts it as a failure.
   const lost = facts.record.session;
@@ -528,8 +545,35 @@ function startAgent(plan, view, facts, ctx) {
   return undefined;
 }
 
+// CW-43: the record agent for the owner's rejection of a closed issue, on the triage
+// per-run cap (D114). The issue is closed and waits for no one, so a failure is reported
+// in a comment instead of asking the owner (D116).
+function startRecord(plan, view, facts, ctx, pending) {
+  if (ctx.running && ctx.running.has(view.number)) return plan.notes.push('a session is already running for this issue');
+  if (ctx.control && ctx.control.stopped) return plan.notes.push('the stop switch is on');
+  const limitUsd = sessionLimit(plan, 'record', facts.record, ctx);
+  if (limitUsd === null) return undefined;
+  const lost = facts.record.session;
+  if (lost) {
+    plan.remember({ session: null });
+    // A request left from before the close (its session job skipped it) is no failure.
+    if (lost.role === 'record') {
+      const failures = Number(facts.record.recordFailures || 0) + 1;
+      if (failures > SESSION_RETRIES) {
+        plan.remember({ recordFailures: null, rejection: { closes: pending.closes, outcome: 'failed' } });
+        plan.say.push(`The record session run ended without a result ${failures} times. Not retrying: record the rejection in \`.out-of-scope/\` by hand if it should be kept (CW-43).`);
+        return undefined;
+      }
+      plan.remember({ recordFailures: failures });
+      plan.say.push('The record session run ended without a result. Retrying once.');
+    }
+  }
+  plan.start = { role: 'record', limitUsd };
+  return undefined;
+}
+
 // Everything but starting an agent: labels repaired, the state moved. `final` means
-// nothing may start for this view.
+// nothing may start for this view, except the record agent for a `rejection` it names.
 function decideState(view, ctx) {
   const { settings } = ctx;
   const plan = new Plan(view.number, view.labels);
@@ -539,7 +583,7 @@ function decideState(view, ctx) {
   if (view.state === 'closed') {
     closeCleanup(plan);
     closedByMerge(plan, view, facts, settings);
-    return { plan, facts, view, final: true };
+    return { plan, facts, view, final: true, rejection: pendingRejection(view, facts, settings) };
   }
   revertUntrustedChanges(plan, view, settings);
   repairLabels(plan, view, facts, settings);
@@ -559,6 +603,7 @@ function decideState(view, ctx) {
 function decideIssue(view, ctx) {
   const staged = decideState(view, ctx);
   if (!staged.final) startAgent(staged.plan, view, staged.facts, ctx);
+  else if (staged.rejection) startRecord(staged.plan, view, staged.facts, ctx, staged.rejection);
   return staged.plan;
 }
 
@@ -596,8 +641,10 @@ function decideAll(views, ctx) {
   // CW-83: each session started here reserves its hard limit from what's left of the month,
   // so the sessions of one run never pass the cap together (lowest issue number first).
   const spend = ctx.spend ? { ...ctx.spend, reservedUsd: Number(ctx.spend.reservedUsd || 0) } : undefined;
-  for (const s of live) {
-    startAgent(s.plan, s.view, s.facts, { ...ctx, spend, queue });
+  for (const s of staged) {
+    if (!s.final) startAgent(s.plan, s.view, s.facts, { ...ctx, spend, queue });
+    else if (s.rejection) startRecord(s.plan, s.view, s.facts, { ...ctx, spend });
+    else continue;
     if (spend && s.plan.start) spend.reservedUsd += s.plan.start.limitUsd;
   }
   return staged.map((s) => s.plan);

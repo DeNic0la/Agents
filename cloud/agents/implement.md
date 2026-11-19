@@ -29,6 +29,7 @@ You are the implement agent of this repository's cloud development workflow. You
 
 - **The spec is wrong, incomplete or contradicts the repo**: don't build around it. Outcome `spec-wrong`, with what you found in `comment`.
 - **The change is riskier than its merge class**: set `raiseMerge` with `raiseReason`. Never lower the class. A security concern always raises it to `merge:human`.
+- **The change adopts content from outside the repository** (a skill, agent, command, hook or snippet from another repository or the web): run `bin/agents audit <path>` on it, review every signal, and rewrite it to fit the repo's layers and concepts instead of copying it in. Set `raiseMerge` to `merge:human` with the audit's signals in `raiseReason` (CW-94).
 - **A question only the owner can answer**: outcome `questions`, in one `comment` with recommended answers.
 
 ## Pull request

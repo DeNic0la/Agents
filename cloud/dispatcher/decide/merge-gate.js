@@ -15,6 +15,7 @@
 
 const { actorKind } = require('./actors');
 const { closingIssues, qualifiedClosing } = require('./spec');
+const { isRecordPull, recordConfirmed } = require('./rejection');
 
 const MAX_DESCRIPTION = 140;
 const AGENT_CLASSES = ['merge:self', 'merge:agent'];
@@ -44,6 +45,13 @@ function judgePull({ pr, issue, settings }) {
   if (actorKind(pr.author, settings) !== 'agent') return ownerDecides('Not opened by the agent');
   if ((pr.labels || []).includes('merge:human')) return ownerDecides('The pull request is merge:human');
   if (!issue) return ownerDecides('Names no single issue it closes');
+  // CW-43: the record of a rejection is merged into a closed issue's repository by the agent,
+  // once the dispatcher confirmed at this commit that it only changes `.out-of-scope/`.
+  if (isRecordPull(pr, issue)) {
+    if (!recordConfirmed(pr, issue)) return ownerDecides(`The record of #${issue.number}'s rejection is not confirmed merge:self at this commit`);
+    const ok = result('success', `The dispatcher confirmed the record of #${issue.number}'s rejection as merge:self at this commit`);
+    return { 'merge-gate': ok, 'owner-merge': result('success', `Issue #${issue.number} was closed as not planned: the agent may merge its record`) };
+  }
   if (issue.state !== 'open') return ownerDecides(`Issue #${issue.number} is not open`);
   const cls = classOf(issue.labels);
   if (!AGENT_CLASSES.includes(cls)) return ownerDecides(cls ? `Issue #${issue.number} is ${cls}` : `Issue #${issue.number} has no merge class`);

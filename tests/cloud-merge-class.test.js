@@ -101,3 +101,21 @@ test('reasons name each rule that raised the class', () => {
   assert.deepEqual(g.reasons, ['more than 15 changed files']);
   assert.deepEqual(lowestMergeClass({ files: [f('README.md')] }, settings).reasons, []);
 });
+
+// CW-95: the settings file, the agent definitions, the dispatcher and the repository
+// protection change only through a merge:human pull request, however they are changed.
+test('CW-95: every file of the workflow itself is merge:human, also when renamed away or deleted', () => {
+  const fs = require('fs');
+  const root = path.join(__dirname, '..');
+  const walk = (dir) => fs.readdirSync(path.join(root, dir), { withFileTypes: true })
+    .flatMap((e) => (e.isDirectory() ? walk(`${dir}/${e.name}`) : [`${dir}/${e.name}`]));
+  const pinned = [...walk('cloud'), ...walk('.github')];
+  for (const p of ['cloud/settings.json', 'cloud/ruleset-main.json', 'cloud/ruleset-owner-merge.json', 'cloud/agents/implement.md', 'cloud/dispatcher/cli.js']) {
+    assert.ok(pinned.includes(p), `${p} exists`);
+  }
+  for (const p of pinned) {
+    assert.equal(cls([f(p)]), 'merge:human', p);
+    assert.equal(cls([f(p, { status: 'removed', additions: 0, deletions: 1 })]), 'merge:human', `${p} deleted`);
+    assert.equal(cls([f('docs/moved.md', { status: 'renamed', previousPath: p })]), 'merge:human', `${p} renamed away`);
+  }
+});

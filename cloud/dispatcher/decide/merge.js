@@ -8,6 +8,7 @@ const { actorKind } = require('./actors');
 const { closingIssues, qualifiedClosing } = require('./spec');
 const { lowestMergeClass, higher } = require('./merge-class');
 const { judgePull, classOf, CONTEXTS } = require('./merge-gate');
+const { isRecordPull, recordConfirmed } = require('./rejection');
 
 const usd = (n) => `$${Number(n || 0).toFixed(2)}`;
 const code = (s) => `\`${s}\``;
@@ -62,17 +63,24 @@ function mergeVerdict({ pr, issue, checkRuns = [], statuses = [], settings, stop
   const wait = (why) => ({ action: 'wait', why });
   if (actorKind(pr.author, settings) !== 'agent') return skip('not opened by the agent');
   if (!issue) return skip('it names no single issue it closes');
-  if (issue.state !== 'open') return skip(`issue #${issue.number} is not open`);
-  const cls = mergeLabelOf(issue.labels);
+  // CW-43: the record of a closed issue's rejection, which the dispatcher confirmed.
+  const record = isRecordPull(pr, issue);
+  if (record && !recordConfirmed(pr, issue)) return skip(`the record of #${issue.number}'s rejection is not confirmed merge:self at this commit`);
+  if (!record && issue.state !== 'open') return skip(`issue #${issue.number} is not open`);
+  const cls = record ? 'merge:self' : mergeLabelOf(issue.labels);
   if (!['merge:self', 'merge:agent'].includes(cls)) return skip(`issue #${issue.number} is ${cls || 'without a merge class'}`);
   if ((pr.labels || []).includes('merge:human')) return skip('the pull request is merge:human');
   if (stopped) return wait('the stop switch CLOUD_STOPPED is on');
   if (pr.draft) return wait('it is a draft');
-  if (!issue.labels.includes('in-review')) return wait(`issue #${issue.number} is not \`in-review\``);
-  if (issue.labels.includes(L.PAUSED)) return wait(`issue #${issue.number} is \`paused\``);
+  if (!record && !issue.labels.includes('in-review')) return wait(`issue #${issue.number} is not \`in-review\``);
+  if (!record && issue.labels.includes(L.PAUSED)) return wait(`issue #${issue.number} is \`paused\``);
   const gate = judgePull({ pr, issue, settings });
   for (const c of CONTEXTS) if (gate[c].state !== 'success') return wait(`${c}: ${gate[c].description}`);
-  if (pr.mergeableState === 'dirty' || pr.mergeable === false) return { action: 'conflict', why: 'it conflicts with the default branch' };
+  if (pr.mergeableState === 'dirty' || pr.mergeable === false) {
+    // No agent takes a closed issue's conflict back; the owner resolves the record by hand.
+    if (record) return skip('the record conflicts with the default branch; only the owner resolves it');
+    return { action: 'conflict', why: 'it conflicts with the default branch' };
+  }
   if (pr.mergeable == null) return wait('GitHub has not yet computed whether it merges cleanly');
 
   // D75: what the rulesets require, no more: the newest `ci` check run must have passed.
@@ -88,7 +96,7 @@ function mergeVerdict({ pr, issue, checkRuns = [], statuses = [], settings, stop
     // dispatch, a failed merge-gate run): the job runs the gate again (D85).
     if (!s || s.state !== 'success') return { action: 'regate', why: `the \`${c}\` status at the head commit is ${s ? s.state : 'missing'}` };
   }
-  return { action: 'merge', mergeClass: cls };
+  return { action: 'merge', mergeClass: cls, ...(record ? { record: true } : {}) };
 }
 
 // CW-69: the closing comment, by the agent after its merge or by the dispatcher after

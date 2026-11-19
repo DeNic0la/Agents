@@ -16,7 +16,7 @@ on:
         description: Agent role
         required: true
         type: choice
-        options: [triage, refine, plan, implement, review]
+        options: [triage, refine, plan, implement, review, record]
 
 # issues: write for the dispatcher's comment and labels; actions: write to start the next
 # dispatch run (or merge-gate after a review). pull-requests and checks: read for the issue's

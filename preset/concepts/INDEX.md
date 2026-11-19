@@ -11,7 +11,7 @@ Each concept is a folder with `CONCEPT.md` as its entry point. Open a concept on
 | [out-of-scope](out-of-scope/CONCEPT.md) | triaging an issue or PR, or a maintainer rejects an enhancement: check and record rejections in `.out-of-scope/` |
 | [portable-skills](portable-skills/CONCEPT.md) | writing a skill or command, deciding who may invoke a skill or whether it is tailored or global, or adding tool-specific or runtime settings (allowed-tools, context, ...) to one |
 | [repo-checkout-roles](repo-checkout-roles/CONCEPT.md) | working in a clone of a codebase that has several clones with different jobs: infer the checkout's role from what the owner does, propose a checkout level, and match it to known roles |
-| [issue-tracker](issue-tracker/CONCEPT.md) | reading an issue from, or writing an issue, comment, label, link or status to, the project's issue tracker (Jira, GitLab, ...) |
+| [issue-tracker](issue-tracker/CONCEPT.md) | reading an issue from, or writing an issue, comment, label, link or status to, the project's issue tracker (Jira, GitLab, GitHub, ...) |
 | [incident-management](incident-management/CONCEPT.md) | production is down or degraded, an alert or rollback trigger fires, a P1 ticket reports an outage, or you write or read an incident record, status update, postmortem or incident follow-up |
 | [domain-driven-design](domain-driven-design/CONCEPT.md) | writing, reviewing or refactoring application code: layering, pure core, explicit call sites, domain naming, error handling, library first |
 | [external-tools](external-tools/CONCEPT.md) | a task matches a listed external tool (maigret, Pulse Diagnostics, ...), or you notice repeated work an established program would do better: set tools up after a yes, and recommend unlisted ones |

@@ -13,6 +13,7 @@ const { fence } = require('./task');
 const { SPEC_START, SPEC_END } = require('./spec');
 const { pullBody } = require('./merge');
 const { issueCap, costRecord } = require('./spend');
+const { ownerCloses } = require('./rejection');
 
 // Outcomes each role may report. `questions` and `objection` are shared.
 const OUTCOMES = {
@@ -117,7 +118,11 @@ const NEEDS = {
     const ok = Array.isArray(ev) && ev.length <= max && ev.every((e) => e && Number.isInteger(e.issue) && e.issue > 0 && isText(e.body, 20000));
     return ok ? null : `\`evidence\` must be at most ${max} \`{ issue, body }\``;
   },
-  recorded: (r) => (isText(r.title, 256) && isText(r.body) ? null : '`title` and `body` are required'),
+  recorded: (r, n) => {
+    if (!isText(r.title, 256) || !isText(r.body)) return '`title` and `body` of the pull request are required';
+    const checked = pullBody(r.body, n, null);
+    return checked.ok ? null : checked.error;
+  },
 };
 
 // Checks a parsed result against its role. Returns { ok, error }.
@@ -150,7 +155,7 @@ function agentActions(role, r, number) {
   if (r.outcome === 'split') issues.push(...r.issues.map((i) => ({ kind: 'split', title: i.title, body: `${i.body.trim()}\n\nSplit from #${number}.` })));
   if (r.outcome === 'recommendations') issues.push(...(r.issues || []).map((i) => ({ kind: 'recommendation', title: i.title, body: i.body })));
   const spec = r.outcome === 'spec' ? r.spec.trim() : null;
-  const pull = r.outcome === 'pushed' ? { title: r.title.trim(), body: r.body } : null;
+  const pull = ['pushed', 'recorded'].includes(r.outcome) ? { title: r.title.trim(), body: r.body } : null;
   const comment = role === 'review' && REVIEW_OUTCOMES.includes(r.outcome) ? reviewComment(r)
     : typeof r.comment === 'string' && r.comment.trim() ? r.comment : null;
   return { spec, pull, comment, issues };
@@ -370,6 +375,52 @@ function monthBound(plan, ctx) {
   return Number(request.limitUsd) < Math.floor(capLeft * 100) / 100;
 }
 
+// CW-43: the record session's result on its closed issue. Nothing asks the owner and the
+// issue gets no state: `rejection` keeps the outcome for this close, so the dispatcher
+// starts no second session for it (D116). `created`'s pull entry carries the merge class
+// the session job computed from its changed files.
+function recordOutcome(plan, { view, record, session, r, settings, created, why }) {
+  const closes = ownerCloses(view, settings);
+  const done = (outcome, extra = {}) => plan.remember({ recordFailures: null, rejection: { closes, outcome, ...extra } });
+  if (session.running) {
+    done('unconfirmed');
+    return plan.say.push('The record session could not be confirmed stopped; check it at its link and stop it there. No other record session starts for this close.');
+  }
+  if (r && r.outcome === 'recorded') {
+    const pull = created.find((c) => c.kind === 'pull');
+    if (!pull) return recordFailed(plan, record, closes, 'its pull request could not be opened');
+    done('recorded', { pull: pull.number, sha: pull.headSha, merge: pull.merge || null });
+    if (pull.merge === 'merge:self') return plan.say.push(`#${pull.number} records this rejection in \`.out-of-scope/\`. The agent merges it when \`ci\` and \`merge-gate\` pass (CW-43).`);
+    const reasons = (pull.reasons || []).join('; ') || 'its changed files could not be read';
+    return plan.say.push(`#${pull.number} records this rejection, but it is not \`merge:self\` (${reasons}), so only the owner merges or closes it.`);
+  }
+  if (r && r.outcome === 'skipped') {
+    done('skipped');
+    return plan.say.push('The record agent recorded nothing; its comment says why. Only rejected enhancements are recorded (CW-43).');
+  }
+  if (r) {
+    done('questions');
+    return plan.say.push('The record agent asked questions in its comment instead of recording. Record the rejection by hand, or reopen the issue and close it as not planned again for a new record session.');
+  }
+  if (session.phase === 'budget') {
+    done('budget');
+    return plan.say.push('The record session stopped at the triage per-run cap. Record the rejection by hand if it should be kept.');
+  }
+  return recordFailed(plan, record, closes, why);
+}
+
+// CW-16 for a closed issue: one retry, then a comment instead of `needs-answer`.
+function recordFailed(plan, record, closes, error) {
+  const failures = Number(record.recordFailures || 0) + 1;
+  plan.say.push(`The record session failed: ${error}.`);
+  if (failures > RETRIES) {
+    plan.remember({ recordFailures: null, rejection: { closes, outcome: 'failed' } });
+    return plan.say.push('Not retrying again. Record the rejection in `.out-of-scope/` by hand if it should be kept (CW-43).');
+  }
+  plan.remember({ recordFailures: failures });
+  return plan.say.push('Retrying once.');
+}
+
 const PHASE_ERRORS = {
   'needs-action': 'it waited for a tool confirmation no one can give',
   timeout: 'it ran past the time limit and was stopped',
@@ -414,6 +465,11 @@ function dispatcherOutcome({ role, view, record = {}, session, text, created = [
     plan.remember({ filed: [...(record.filed || []), ...filed.map((c) => c.number)] });
   }
 
+  if (role === 'record') {
+    const why = session.error || (session.phase === 'done' ? checked.error : PHASE_ERRORS[session.phase] || checked.error);
+    recordOutcome(plan, { view, record, session, r, settings, created, why });
+    return { plan, result: r };
+  }
   if (session.running) {
     // The platform still reports it running: a retry could run a second paid session.
     toNeedsAnswer(plan, state, `the ${role} session could not be confirmed stopped; check it at its link and stop it there`, `The ${role} session may still be running.`);

@@ -78,6 +78,14 @@ async function runMerge({ gh, agentClient, mint, settings, live, stopped = false
       continue;
     }
     const record = c.issue.record || {};
+    if (verdict.record) {
+      // CW-43: the issue was closed by the owner; the dispatcher's note is all it gets.
+      const plan = new Plan(c.issue.number, c.issue.labels);
+      plan.say.push(`The agent merged #${p.number}, the record of this rejection in \`.out-of-scope/\`, at ${String(merged && merged.sha).slice(0, 7)}.`);
+      plan.remember({ rejection: { ...record.rejection, merged: { sha: (merged && merged.sha) || null, at: now().toISOString() } } });
+      await applyPlan(gh, plan, 'live');
+      continue;
+    }
     // D86: the closing comment first; when it fails, the record says so and the dispatcher
     // posts it on its next run (a merged pull request isn't listed here again).
     let commented = true;

@@ -8,7 +8,7 @@
 const fs = require('fs');
 const path = require('path');
 const { createClient } = require('./github/client');
-const { loadIssueView, listIssueIndex, listCommentsSince } = require('./github/snapshot');
+const { loadIssueView, listIssueIndex, listCommentsSince, loadPullFiles } = require('./github/snapshot');
 const { statusComment } = require('./github/status');
 const { monthStart, monthSpend, monthStatus } = require('./decide/spend');
 const { applyPlan } = require('./github/apply');
@@ -20,6 +20,7 @@ const { taskMessage, fence } = require('./decide/task');
 const { withSpec, splitBody } = require('./decide/spec');
 const { agentActions, dispatcherOutcome, parseResult, validateResult, scrubSecrets } = require('./decide/outcome');
 const { branchName, pullBody, pullToReuse, mergeLabelOf, mergeClassCheck } = require('./decide/merge');
+const { recordBranch, recordClass } = require('./decide/rejection');
 const { parseDefinition } = require('./platform/sync');
 const { createPlatformClient } = require('./platform/client');
 const { installationToken } = require('./platform/app-token');
@@ -31,6 +32,12 @@ const MAX_BODY = 65536; // GitHub's limit for an issue body
 
 // Why this run starts nothing, or null when the issue still asks for this role.
 function skipReason(view, record, role) {
+  // CW-43: the record agent works on an issue the owner closed.
+  if (role === 'record') {
+    if (view.state === 'open') return 'the issue is open again';
+    if (!record.session || record.session.role !== role) return 'the dispatcher requested no such session';
+    return null;
+  }
   if (view.state !== 'open') return 'the issue is closed';
   const state = L.STATES.find((s) => view.labels.includes(s));
   if (roleFor(state, view.labels) !== role) return `its state ${state ? `\`${state}\`` : '(none)'} doesn't call for the ${role} agent`;
@@ -73,6 +80,32 @@ function branchSection(branch, exists, defaultBranch) {
   };
 }
 
+// CW-43: the record agent's branch, continued like the implement agent's (an earlier close
+// of the same issue may have left it). Only `.out-of-scope/` changes keep it `merge:self`.
+function recordSection(branch, exists, defaultBranch) {
+  const b = `\`${branch}\``;
+  const d = `\`${defaultBranch}\``;
+  return {
+    title: 'Branch',
+    text: (exists
+      ? `The branch ${b} exists from an earlier record and is mounted: merge ${d} into it first, then add this record.`
+      : `The branch ${b} doesn't exist yet, so ${d} is mounted. Create ${b} from it.`)
+      + ` Change only files in \`.out-of-scope/\`, and push only to ${b}.`,
+  };
+}
+
+// CW-43: the record pull request's class, from its changed files at its head commit. The
+// dispatcher's record of it lets the merge job merge it (D117); any other class means only
+// the owner merges it, so the pull request is labelled `merge:human`.
+async function checkRecordPull(gh, entry, settings) {
+  const raw = await gh.request('GET', `/repos/${gh.repo}/pulls/${entry.number}`);
+  const check = recordClass(await loadPullFiles(gh, raw), settings);
+  entry.headSha = raw.head.sha;
+  entry.merge = check.mergeClass;
+  entry.reasons = check.reasons;
+  if (check.mergeClass !== 'merge:self') await gh.request('POST', `/repos/${gh.repo}/issues/${entry.number}/labels`, { labels: ['merge:human'] });
+}
+
 // CW-68: an implementation the review or CI sent back. The review's findings are in its
 // newest comment on the issue.
 function reviewRoundSection(record, settings) {
@@ -112,11 +145,10 @@ function pullChanged(before, after) {
 
 // CW-51, CW-55: opens the issue's one pull request, or updates it; one closed without
 // merging is reopened. Returns the entry for `created`.
-async function publishPull(agent, { issue, pull, labels, defaultBranch }) {
-  const branch = branchName(issue);
+async function publishPull(agent, { issue, pull, labels, defaultBranch, branch = branchName(issue), mergeClass = mergeLabelOf(labels) }) {
   const headSha = await branchHead(agent, branch);
-  if (!headSha) throw new Error(`the agent reported \`pushed\`, but the branch ${branch} doesn't exist`);
-  const checked = pullBody(pull.body, issue, mergeLabelOf(labels));
+  if (!headSha) throw new Error(`the agent reported its push, but the branch ${branch} doesn't exist`);
+  const checked = pullBody(pull.body, issue, mergeClass);
   if (!checked.ok) throw new Error(checked.error);
   const owner = String(agent.repo).split('/')[0];
   const r = `/repos/${agent.repo}/pulls`;
@@ -168,6 +200,12 @@ async function runForIssue({ issue, role, settings, gh, agentClient, platform, m
       sections.push(branchSection(branch, exists, defaultBranch));
       const round = reviewRoundSection(facts.record, settings);
       if (round) sections.push(round);
+    }
+    if (role === 'record') {
+      const branch = recordBranch(issue);
+      const exists = Boolean(await branchHead(gh, branch));
+      if (exists) mount = branch;
+      sections.push(recordSection(branch, exists, defaultBranch));
     }
     if (role === 'review') {
       const pull = before.pull;
@@ -227,7 +265,13 @@ async function runForIssue({ issue, role, settings, gh, agentClient, platform, m
     }
     if (actions.pull) {
       try {
-        created.push(await publishPull(agent, { issue, pull: actions.pull, labels: view.labels, defaultBranch }));
+        const record = role === 'record' ? { branch: recordBranch(issue), mergeClass: 'merge:self' } : {};
+        const entry = await publishPull(agent, { issue, pull: actions.pull, labels: view.labels, defaultBranch, ...record });
+        created.push(entry);
+        // Unchecked, the record stays unconfirmed: the agent never merges it, the owner does.
+        if (role === 'record') {
+          await checkRecordPull(gh, entry, settings).catch((err) => log(`::warning::Could not check the files of record pull request #${entry.number}: ${scrubSecrets(err.message, tokens)}`));
+        }
       } catch (err) {
         log(`::warning::Could not open or update the pull request for #${issue}: ${scrubSecrets(err.message, tokens)}`);
       }
@@ -253,6 +297,9 @@ async function runForIssue({ issue, role, settings, gh, agentClient, platform, m
   // Label changes by GITHUB_TOKEN start no run, so the next step is asked for here.
   await dispatchWorkflow(gh, DISPATCH_WORKFLOW, defaultBranch, { issue });
   // CW-64: merge-gate reads the approval just recorded; its run then starts the merge job.
+  // CW-43: the same for a record pull request the dispatcher confirmed as merge:self.
+  const rejection = plan.record.rejection;
+  if (rejection && rejection.pull && rejection.merge === 'merge:self') await dispatchWorkflow(gh, MERGE_GATE_WORKFLOW, defaultBranch, { pr: String(rejection.pull) });
   const review = plan.record.review;
   if (review && review.verdict === 'approved') await dispatchWorkflow(gh, MERGE_GATE_WORKFLOW, defaultBranch, { pr: String(review.pull) });
   return session.phase;
@@ -295,4 +342,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { runForIssue, skipReason, bodyChanged, pullChanged, publishable, liveEnvProblems, branchSection, reviewRoundSection, pullSection, publishPull, main };
+module.exports = { runForIssue, skipReason, bodyChanged, pullChanged, publishable, liveEnvProblems, branchSection, recordSection, reviewRoundSection, pullSection, publishPull, checkRecordPull, main };

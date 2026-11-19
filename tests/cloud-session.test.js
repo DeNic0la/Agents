@@ -681,7 +681,7 @@ test('liveEnvProblems lists the missing variables', () => {
 // A fake GitHub: one issue, its timeline, and a log of every write in order.
 // `branches`: name -> head sha of the branches that exist; `pulls`: the pull requests from them.
 // `pull`: the raw pull request that closes #7, or a function returning it per read.
-function fakeGitHub({ labels = ['triage', 'origin:owner'], timeline, state = 'open', role = 'triage', branches = {}, pulls = [], pull = null, record = {} } = {}) {
+function fakeGitHub({ labels = ['triage', 'origin:owner'], timeline, state = 'open', role = 'triage', branches = {}, pulls = [], pull = null, record = {}, files = [{ filename: 'docs/guide.md', status: 'modified', additions: 3, deletions: 1 }] } = {}) {
   const writes = [];
   const raw = timeline || [
     ...labels.map((l) => ({ event: 'labeled', actor: { login: BOT }, label: { name: l } })),
@@ -712,7 +712,7 @@ function fakeGitHub({ labels = ['triage', 'origin:owner'], timeline, state = 'op
       if (p.endsWith('/issues/7/timeline')) return raw;
       if (p.includes('/dependencies/')) return [];
       if (p.includes('/issues?state=all')) return [issue, other];
-      if (pull && p.endsWith('/pulls/50/files')) return [{ filename: 'docs/guide.md', status: 'modified', additions: 3, deletions: 1 }];
+      if (pull && p.endsWith('/pulls/50/files')) return files;
       throw new Error(`unexpected paginate ${p}`);
     },
   };
@@ -1222,4 +1222,60 @@ test('CW-68: the implement task after a review names the round', async () => {
   const { deps, platform } = jobDeps(fg, block(PUSHED), { role: 'implement' });
   await runForIssue(deps);
   assert.match(platform.log.created[0].initialMessage, /This is review round 2 of 3\. The newest review comment on this issue/);
+});
+
+// ---- record (phase 10) ---------------------------------------------------------------
+
+const recordTimeline = (role = 'record') => [
+  { event: 'closed', actor: { login: OWNER } },
+  { event: 'commented', actor: { login: BOT }, body: `Closed.\n\n${formatRecord({ intake: true, session: { role, limitUsd: 1, at: 'now' } })}` },
+];
+const RECORD_PR = () => ({ number: 50, user: { login: AGENT }, head: { sha: 'rec123', ref: 'cloud/out-of-scope-7' }, base: { sha: 'base1' }, body: 'Closes #7', state: 'open' });
+const RECORDED = { outcome: 'recorded', title: 'docs: record out-of-scope decision for a GUI', body: 'Records the GUI rejection.' };
+const recordRepo = (files, branches = { 'cloud/out-of-scope-7': 'rec123' }) =>
+  fakeGitHub({ labels: [], state: 'closed', timeline: recordTimeline(), branches, pull: RECORD_PR, files });
+const dispatched = (fg) => fg.writes.filter((w) => w.path.includes('/actions/workflows/')).map((w) => [/workflows\/([^/]+)\//.exec(w.path)[1], w.body.inputs]);
+
+test('CW-43: the record session only runs on its closed issue, at the dispatcher\'s request', () => {
+  const session = { role: 'record', limitUsd: 1, at: 'now' };
+  assert.equal(skipReason(ov([], { state: 'closed' }), { session }, 'record'), null);
+  assert.match(skipReason(ov(['triage']), { session }, 'record'), /open again/);
+  assert.match(skipReason(ov([], { state: 'closed' }), { session: { ...session, role: 'implement' } }, 'record'), /no such session/);
+  assert.match(skipReason(ov([], { state: 'closed' }), {}, 'record'), /no such session/);
+});
+
+test('CW-43: the record session opens a merge:self pull request from its branch, and the merge job is asked for it', async () => {
+  const fg = recordRepo([{ filename: '.out-of-scope/gui.md', status: 'added', additions: 20, deletions: 0 }]);
+  const { deps, platform } = jobDeps(fg, block(RECORDED), { role: 'record' });
+  assert.equal(await runForIssue(deps), 'done');
+  const created = platform.log.created[0];
+  assert.match(created.initialMessage, /# Task: record for issue #7/);
+  assert.match(created.initialMessage, /`cloud\/out-of-scope-7` exists from an earlier record and is mounted/);
+  assert.equal(created.resources[0].checkout.name, 'cloud/out-of-scope-7');
+  const post = fg.writes.find((w) => w.who === 'agent' && w.method === 'POST' && w.path.endsWith('/pulls'));
+  assert.equal(post.body.head, 'cloud/out-of-scope-7');
+  assert.match(post.body.body, /Merge class: merge:self[\s\S]*Closes #7/);
+  const comment = fg.writes.find((w) => w.who === 'gh' && w.path.endsWith('/issues/7/comments'));
+  assert.deepEqual(recordOf(comment).rejection, { closes: 1, outcome: 'recorded', pull: 50, sha: 'rec123', merge: 'merge:self' });
+  assert.equal(recordOf(comment).session, null);
+  assert.ok(!fg.writes.some((w) => w.path.endsWith('/labels')));
+  assert.deepEqual(dispatched(fg), [['dispatch.yml', { issue: '7' }], ['merge-gate.yml', { pr: '50' }]]);
+});
+
+test('CW-43, D118: a record that changes more than .out-of-scope/ is labelled merge:human and left to the owner', async () => {
+  const fg = recordRepo([{ filename: '.out-of-scope/gui.md', status: 'added', additions: 20, deletions: 0 }, { filename: 'README.md', status: 'modified', additions: 1, deletions: 0 }]);
+  await runForIssue(jobDeps(fg, block(RECORDED), { role: 'record' }).deps);
+  const label = fg.writes.find((w) => w.path.endsWith('/issues/50/labels'));
+  assert.deepEqual([label.who, label.method, label.body], ['gh', 'POST', { labels: ['merge:human'] }]);
+  const comment = fg.writes.find((w) => w.who === 'gh' && w.path.endsWith('/issues/7/comments'));
+  assert.equal(recordOf(comment).rejection.merge, 'merge:agent');
+  assert.match(comment.body.body, /README\.md is outside `\.out-of-scope\/`.*only the owner merges or closes it/);
+  assert.deepEqual(dispatched(fg), [['dispatch.yml', { issue: '7' }]]);
+});
+
+test('CW-43: the record agent starts its branch from the default branch, or continues an earlier one', () => {
+  const { recordSection } = req('session-cli.js');
+  assert.match(recordSection('cloud/out-of-scope-7', false, 'main').text, /`cloud\/out-of-scope-7` doesn't exist yet, so `main` is mounted\. Create/);
+  assert.match(recordSection('cloud/out-of-scope-7', true, 'main').text, /merge `main` into it first/);
+  assert.match(recordSection('cloud/out-of-scope-7', true, 'main').text, /Change only files in `\.out-of-scope\/`, and push only to `cloud\/out-of-scope-7`/);
 });

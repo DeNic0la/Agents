@@ -63,7 +63,8 @@ function reconcileTargets({ focus, open, closed = [], now = Date.now(), recentMi
   const numbers = new Set(focus === 'all' ? open.map((i) => i.number) : focus);
   for (const i of open) if (recent(i) || i.labels.includes('ready')) numbers.add(i.number);
   if (open.some((i) => i.labels.includes('ready'))) for (const i of open) if (i.labels.includes('needs-answer')) numbers.add(i.number);
-  for (const i of closed) if (recent(i) && i.labels.some((l) => CLEANUP.includes(l))) numbers.add(i.number);
+  // CW-43: a recent close as not planned may still need its record agent (D115).
+  for (const i of closed) if (recent(i) && (i.labels.some((l) => CLEANUP.includes(l)) || i.stateReason === 'not_planned')) numbers.add(i.number);
   const activeElsewhere = open.filter((i) => !numbers.has(i.number) && i.labels.some((l) => ACTIVE.includes(l))).length;
   return { numbers: [...numbers].sort((a, b) => a - b), activeElsewhere };
 }

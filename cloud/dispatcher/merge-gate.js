@@ -45,6 +45,7 @@ async function loadIssue(client, repository, number, settings) {
 async function judge(client, repository, number, settings) {
   const prData = await client.request('GET', `/repos/${repository}/pulls/${number}`);
   const pr = {
+    number,
     author: prData.user && prData.user.login,
     headSha: prData.head.sha,
     body: prData.body || '',

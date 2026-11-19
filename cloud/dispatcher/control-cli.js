@@ -129,9 +129,12 @@ async function stopAll({ gh, platform, settings, now = Date.now, sleep = (ms) =>
   // cleared in time is not recorded twice.
   const matched = new Set();
   const open = await listOpenIssues(gh);
-  for (const issue of open) {
-    if (!issue.labels.some((l) => L.STATES.includes(l))) continue;
-    const view = await loadIssueView(gh, issue.number);
+  // CW-43: a record session works on a closed issue, which the open issues don't list.
+  const closedWithRecord = [...new Set(sessions.filter((s) => s.role === 'record').map((s) => Number(s.issue)))]
+    .filter((n) => Number.isInteger(n) && n > 0 && !open.some((i) => i.number === n));
+  const targets = [...open.filter((i) => i.labels.some((l) => L.STATES.includes(l))).map((i) => i.number), ...closedWithRecord];
+  for (const number of targets) {
+    const view = await loadIssueView(gh, number);
     const record = readFacts(view, settings).record;
     if (!record.session) continue;
     const mine = sessionsFor(view.number, record.session, sessions);

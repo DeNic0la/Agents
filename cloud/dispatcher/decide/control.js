@@ -40,7 +40,13 @@ function stoppedPlan(view, record, ended, { unchecked = false } = {}) {
       : `The owner's stop switch ended the ${role} session [${s.id}](${s.link}). It cost ${usd(s.costUsd)}.`);
   }
   plan.remember({ ...costRecord(record, role, cost), session: null });
-  if (unchecked) {
+  if (view.state === 'closed') {
+    // CW-43: the record agent's issue is closed and waits for no one (D116).
+    const doubt = unchecked || ended.some((s) => s.running);
+    plan.say.push(doubt
+      ? 'Its result is not applied. Check the platform and stop the session there if it still runs.'
+      : 'Its result is not applied. When the owner resumes, a dispatch run that looks at this issue starts the record agent again.');
+  } else if (unchecked) {
     toNeedsAnswer(plan, plan.state, `the stop switch had no platform key to find and stop the ${role} session; check the platform and stop it there`, 'The stop switch cancelled the session run.');
   } else if (ended.some((s) => s.running)) {
     toNeedsAnswer(plan, plan.state, `the ${role} session could not be confirmed stopped; check it at its link and stop it there`, 'Its result is not applied.');
