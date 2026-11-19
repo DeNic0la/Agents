@@ -100,9 +100,36 @@ test('advise: a Saturday is a light day; stop at the reserve', () => {
 function tempConfig() { return fs.mkdtempSync(path.join(os.tmpdir(), 'usage-pace-test-')); }
 function run(script, input, env) {
   const clean = { ...process.env };
-  for (const k of ['USAGE_PACE_WEEKDAYS', 'USAGE_PACE_COMPACT', 'USAGE_PACE_RESERVE']) delete clean[k];
-  return execFileSync(process.execPath, [script], { input: JSON.stringify(input), env: { ...clean, ...env }, encoding: 'utf8' });
+  for (const k of ['USAGE_PACE_WEEKDAYS', 'USAGE_PACE_COMPACT', 'USAGE_PACE_RESERVE', 'USAGE_PACE_OMP_BIN']) delete clean[k];
+  return execFileSync(process.execPath, [script], { input: JSON.stringify(input),
+    env: { ...clean, USAGE_PACE_OMP_CONFIG: 'off', ...env }, encoding: 'utf8' });
 }
+
+test('usage-pace.js cleanPrompt: drops OSC sequences and blank lines, keeps colours', () => {
+  const { cleanPrompt } = require(statusline);
+  const raw = '\x1b]133;D;0\x07\x1b]133;A\x07\x1b[38;2;1;2;3m claude \x1b[0m \x1b]0;title\x07 \x1b]133;B\x1b\\\r\n\x1b[0m  \n';
+  assert.equal(cleanPrompt(raw), '\x1b[38;2;1;2;3m claude \x1b[0m');
+  assert.equal(cleanPrompt(''), '');
+  assert.equal(cleanPrompt(undefined), '');
+});
+
+test('usage-pace.js: no prompt line when it is off or the theme is missing', () => {
+  const dir = tempConfig(), input = { model: { display_name: 'Opus' } };
+  assert.equal(run(statusline, input, { CLAUDE_CONFIG_DIR: dir }), 'Opus');
+  assert.equal(run(statusline, input, { CLAUDE_CONFIG_DIR: dir, USAGE_PACE_OMP_CONFIG: path.join(dir, 'none.omp.json') }), 'Opus');
+  fs.writeFileSync(path.join(dir, 'theme.omp.json'), '{}');
+  assert.equal(run(statusline, input, { CLAUDE_CONFIG_DIR: dir, USAGE_PACE_OMP_CONFIG: path.join(dir, 'theme.omp.json'),
+    USAGE_PACE_OMP_BIN: path.join(dir, 'no-such-program') }), 'Opus');
+});
+
+test('usage-pace.js: the oh-my-posh line goes above the usage line', { skip: process.platform === 'win32' && 'needs a shell script as the program' }, () => {
+  const dir = tempConfig(), theme = path.join(dir, 'theme.omp.json'), bin = path.join(dir, 'oh-my-posh');
+  fs.writeFileSync(theme, '{}');
+  fs.writeFileSync(bin, '#!/bin/sh\nread -r input\nprintf \'\\033]133;A\\007 %s %s %s \\033]0;t\\007\\n\' "$1" "$2" "$(basename "$3")"\n');
+  fs.chmodSync(bin, 0o755);
+  const out = run(statusline, { model: { display_name: 'Opus' } }, { CLAUDE_CONFIG_DIR: dir, USAGE_PACE_OMP_CONFIG: theme, USAGE_PACE_OMP_BIN: bin });
+  assert.equal(out, ' claude --config theme.omp.json\nOpus');
+});
 
 test('usage-pace.js: full and compact output, and usage-pace.json', () => {
   const dir = tempConfig(), now = Date.now() / 1000;
