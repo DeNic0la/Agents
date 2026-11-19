@@ -109,7 +109,14 @@ const NEEDS = {
     if (r.merge && !isText(r.classReason, 2000)) return '`classReason` is required to recommend merging (CW-65)';
     return itemsError(r);
   },
-  recommendations: (r, n, s) => (issueList(r.issues || [], 0, Number(s.scout && s.scout.issuesPerRun) || 3) ? null : '`issues` has too many entries or a bad one'),
+  recommendations: (r, n, s) => {
+    const max = Number(s.scout && s.scout.issuesPerRun) || 3;
+    if (!issueList(r.issues || [], 0, max)) return '`issues` has too many entries or a bad one';
+    // CW-6: new evidence for an existing issue instead of a second issue.
+    const ev = r.evidence === undefined || r.evidence === null ? [] : r.evidence;
+    const ok = Array.isArray(ev) && ev.length <= max && ev.every((e) => e && Number.isInteger(e.issue) && e.issue > 0 && isText(e.body, 20000));
+    return ok ? null : `\`evidence\` must be at most ${max} \`{ issue, body }\``;
+  },
   recorded: (r) => (isText(r.title, 256) && isText(r.body) ? null : '`title` and `body` are required'),
 };
 

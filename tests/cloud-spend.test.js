@@ -308,7 +308,7 @@ test('CW-84, scenario 10: stop turns off the workflows, cancels their runs, inte
   assert.deepEqual(report.issues, [5]);
   assert.deepEqual(report.unmatched, ['s_other']);
   assert.equal(report.interrupted, 2);
-  assert.match(summary('stop', report), /Stopped: disabled dispatch\.yml, session\.yml, merge\.yml; cancelled 1 run\(s\); interrupted 2 session\(s\)\.\nRecorded on: #5\.\nInterrupted sessions no issue accounts for: s_other\./);
+  assert.match(summary('stop', report), /Stopped: disabled dispatch\.yml, session\.yml, merge\.yml, scout\.yml; cancelled 1 run\(s\); interrupted 2 session\(s\)\.\nRecorded on: #5\.\nInterrupted sessions no issue accounts for: s_other\./);
 });
 
 test('CW-84: without the platform key the stop still turns everything off and clears the requests', async () => {
@@ -354,8 +354,9 @@ test('CW-84: resume turns the workflows on and starts a full reconcile', async (
   const lines = [];
   const report = await resumeAll({ gh, ref: 'main', stoppedVariable: true, log: (l) => lines.push(l) });
   const writes = gh.calls.filter(([m]) => m !== 'GET');
-  assert.deepEqual(writes.slice(0, 3).map(([, p]) => p), STOPPABLE_WORKFLOWS.map((w) => `/repos/o/r/actions/workflows/${w}/enable`));
-  assert.deepEqual(writes[3], ['POST', '/repos/o/r/actions/workflows/dispatch.yml/dispatches', { ref: 'main', inputs: {} }]);
+  const n = STOPPABLE_WORKFLOWS.length;
+  assert.deepEqual(writes.slice(0, n).map(([, p]) => p), STOPPABLE_WORKFLOWS.map((w) => `/repos/o/r/actions/workflows/${w}/enable`));
+  assert.deepEqual(writes[n],['POST', '/repos/o/r/actions/workflows/dispatch.yml/dispatches', { ref: 'main', inputs: {} }]);
   assert.deepEqual(report.failed, []);
   assert.ok(lines.some((l) => /CLOUD_STOPPED is still `true`/.test(l)));
 });
