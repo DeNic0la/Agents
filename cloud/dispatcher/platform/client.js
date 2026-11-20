@@ -10,7 +10,6 @@ const MAX_RETRIES = 3;
 const PAGE_PARAM = 'page'; // query parameter that carries the page cursor
 const NEXT_PAGE_FIELD = 'next_page'; // response field with the next cursor (null/absent at the end)
 const LIST_FIELD = 'data'; // response field holding the items of a list
-const AFTER_PARAM = 'after'; // events listing: only events after this event id
 const METADATA_FIELD = 'metadata'; // session create: free-form string map (unconfirmed)
 const ROTATE_METHOD = 'POST'; // method of the resource token rotation call (unconfirmed)
 const SKILL_FILES_FIELD = 'files[]'; // skill upload: multipart field that carries each file
@@ -38,14 +37,33 @@ function costUsd(session) {
 }
 
 // 'running' | 'done' | 'needs-action' | 'budget' | 'failed'
-function sessionPhase(session) {
+// The session object has no stop reason: it is on the session.status_idle event
+// (https://platform.claude.com/docs/en/api/beta/sessions/events/list). `events` is oldest first.
+function lastIndexOfType(events, type) {
+  for (let i = events.length - 1; i >= 0; i -= 1) if (events[i] && events[i].type === type) return i;
+  return -1;
+}
+
+// A session that is not idle or terminated is running; this needs no events.
+function sessionRunning(session) {
   const status = session && session.status;
-  if (status === 'terminated') return 'failed';
-  if (status !== 'idle') return 'running';
-  const reason = session.stop_reason && session.stop_reason.type;
+  return status !== 'idle' && status !== 'terminated';
+}
+
+// 'running' | 'done' | 'needs-action' | 'budget' | 'failed'. Only user.message and
+// session.status_idle count: interrupt events may have empty ids or not be persisted, and
+// session.thread_status_idle belongs to a thread, not to the session.
+function sessionPhase(session, events) {
+  if (sessionRunning(session)) return 'running';
+  const list = Array.isArray(events) ? events : [];
+  const idleAt = lastIndexOfType(list, 'session.status_idle');
+  const reason = idleAt >= 0 && list[idleAt].stop_reason ? list[idleAt].stop_reason.type : undefined;
+  if (session.status === 'terminated') return reason === 'end_turn' ? 'done' : 'failed';
+  if (idleAt < 0 || idleAt < lastIndexOfType(list, 'user.message')) return 'running'; // idle before it has answered the last message
+  if (reason === 'end_turn') return 'done';
   if (reason === 'requires_action') return 'needs-action';
   if (reason === 'budget_reached') return 'budget';
-  return 'done';
+  return 'failed'; // retries_exhausted, refusal, or a reason this code doesn't know
 }
 
 function textEvent(text) {
@@ -161,11 +179,11 @@ function createPlatformClient({
     listSessions: ({ agentId, limit } = {}) => listAll('/v1/sessions', { agent_id: agentId, limit, order: 'desc' }),
     sendMessage: (id, text) => request('POST', `/v1/sessions/${id}/events`, { events: [textEvent(text)] }),
     interrupt: (id) => request('POST', `/v1/sessions/${id}/events`, { events: [{ type: 'user.interrupt' }] }),
-    listEvents: (id, { after } = {}) => listAll(`/v1/sessions/${id}/events`, { [AFTER_PARAM]: after }),
+    listEvents: (id) => listAll(`/v1/sessions/${id}/events`),
     listResources: (id) => listAll(`/v1/sessions/${id}/resources`),
     setResourceToken: (id, resourceId, token) =>
       request(ROTATE_METHOD, `/v1/sessions/${id}/resources/${resourceId}`, { authorization_token: token }),
   };
 }
 
-module.exports = { createPlatformClient, SKILL_TITLE_FIELD, PlatformError, usdToBudget, costUsd, sessionPhase };
+module.exports = { createPlatformClient, SKILL_TITLE_FIELD, PlatformError, usdToBudget, costUsd, sessionPhase, sessionRunning };

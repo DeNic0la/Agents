@@ -470,8 +470,13 @@ test('CW-91: scrubSecrets removes known tokens and the token shapes of GitHub an
 
 // ---- session.js ---------------------------------------------------------------------
 
+// Event shape from https://platform.claude.com/docs/en/api/beta/sessions/events/list:
+// session.status_idle carries { id, type, stop_reason: { type }, processed_at }.
+// The session object (https://platform.claude.com/docs/en/api/beta/sessions/retrieve) has no stop_reason.
+const userMessageEvent = { id: 'sevt_u1', type: 'user.message', content: [{ type: 'text', text: 'task' }], processed_at: '2026-11-20T10:00:00Z' };
+const idleEvent = (reason = 'end_turn', id = 'sevt_i1') => ({ id, type: 'session.status_idle', stop_reason: { type: reason }, processed_at: '2026-11-20T10:05:00Z' });
 function fakePlatform(over = {}) {
-  const log = { created: [], interrupts: 0, tokens: [], gets: 0 };
+  const log = { created: [], interrupts: 0, tokens: [], gets: 0, listed: 0 };
   const clock = { t: 1700000000000 };
   const platform = {
     log,
@@ -480,11 +485,17 @@ function fakePlatform(over = {}) {
     listEnvironments: async () => over.environments || [{ id: 'env_1', ...desiredEnvironments(settings).repo }],
     createSession: async (args) => { log.created.push(args); return { id: 'sesn_1', status: 'running' }; },
     getSession: async () => { log.gets += 1; return over.session(log.gets, clock.t - 1700000000000, log); },
-    listEvents: async () => over.events || [
-      { type: 'agent.message', content: [{ type: 'text', text: 'first' }] },
-      { type: 'agent.message', content: [{ type: 'text', text: 'last ' }, { type: 'image' }, { type: 'text', text: 'one' }] },
-      { type: 'user.message', content: [{ type: 'text', text: 'ignored' }] },
-    ],
+    listEvents: async () => {
+      log.listed += 1;
+      if (typeof over.events === 'function') return over.events(log.gets);
+      return over.events || [
+        userMessageEvent,
+        { type: 'agent.message', content: [{ type: 'text', text: 'first' }] },
+        { type: 'agent.message', content: [{ type: 'text', text: 'last ' }, { type: 'image' }, { type: 'text', text: 'one' }] },
+        { type: 'user.message', content: [{ type: 'text', text: 'ignored' }] },
+        idleEvent(over.stop || 'end_turn'),
+      ];
+    },
     interrupt: async () => { log.interrupts += 1; if (over.onInterrupt) over.onInterrupt(); },
     listResources: async () => [{ id: 'res_other', type: 'file' }, { id: 'res_repo', type: 'github_repository' }],
     setResourceToken: async (sid, rid, token) => { log.tokens.push({ sid, rid, token }); },
@@ -498,7 +509,7 @@ async function run(platform, over = {}) {
     mintToken: async () => { n += 1; return `ghs_token${n}`; }, now: () => platform.clock.t, sleep: async (ms) => { platform.clock.t += ms; }, ...over,
   });
 }
-const idle = (cents = 123) => ({ status: 'idle', stop_reason: { type: 'end_turn' }, usage: { list_cost: { amount: String(cents), currency: 'USD' } } });
+const idle = (cents = 123) => ({ status: 'idle', usage: { list_cost: { amount: String(cents), currency: 'USD' } } });
 const running = { status: 'running' };
 
 test('CW-16: runSession returns the last agent message and the cost', async () => {
@@ -593,24 +604,54 @@ test('CW-93: no session starts in an environment whose network access differs fr
   assert.equal(created.length, 0);
 });
 
-test('CW-16: idle without a stop_reason right after creation keeps polling', async () => {
-  const p = fakePlatform({ session: (n) => (n < 4 ? { status: 'idle' } : idle()) });
-  const r = await run(p);
-  assert.equal(p.log.gets, 4);
+test('CW-16: idle with only the user.message keeps polling until a session.status_idle appears, with no time-based grace', async () => {
+  const p = fakePlatform({
+    session: (n) => (n < 5 ? running : idle()),
+    events: (n) => (n < 5 ? [userMessageEvent] : [userMessageEvent, idleEvent('end_turn')]),
+  });
+  // Idle from the first poll on, with no idle event yet: still running, however long it lasts.
+  const early = fakePlatform({
+    session: () => idle(),
+    events: (n) => (n < 6 ? [userMessageEvent] : [userMessageEvent, { id: 'sevt_a', type: 'agent.message', content: [{ type: 'text', text: 'late' }] }, idleEvent('end_turn')]),
+  });
+  const r = await run(early);
+  assert.equal(early.log.gets, 6);
   assert.equal(r.phase, 'done');
-  const late = fakePlatform({ session: (n, elapsed) => (elapsed < 300000 ? running : { status: 'idle' }) });
-  assert.equal((await run(late)).phase, 'done');
+  assert.equal(r.text, 'late');
+  assert.equal((await run(p)).phase, 'done');
 });
 
-test('CW-16: a terminated session is failed, a budget stop and a tool confirmation have their own phases', async () => {
-  const failed = await run(fakePlatform({ session: () => ({ status: 'terminated', usage: { list_cost: { amount: '50' } } }) }));
+test('CW-16: the events are fetched once per idle poll, and not while the session runs', async () => {
+  const p = fakePlatform({ session: (n) => (n < 3 ? running : idle()) });
+  const r = await run(p);
+  assert.equal(r.phase, 'done');
+  assert.equal(p.log.listed, 1);
+});
+
+test('CW-16: a terminated session is failed after a refusal, a budget stop and a tool confirmation have their own phases', async () => {
+  const failed = await run(fakePlatform({ session: () => ({ status: 'terminated', usage: { list_cost: { amount: '50' } } }), events: [userMessageEvent, idleEvent('refusal')] }));
   assert.equal(failed.phase, 'failed');
   assert.equal(failed.text, '');
   assert.equal(failed.costUsd, 0.5);
-  const budget = await run(fakePlatform({ session: () => ({ status: 'idle', stop_reason: { type: 'budget_reached' } }) }));
+  const noIdle = await run(fakePlatform({ session: () => ({ status: 'terminated' }), events: [userMessageEvent] }));
+  assert.equal(noIdle.phase, 'failed');
+  const ended = await run(fakePlatform({ session: () => ({ status: 'terminated' }) }));
+  assert.equal(ended.phase, 'done');
+  const budget = await run(fakePlatform({ session: () => ({ status: 'idle' }), stop: 'budget_reached' }));
   assert.equal(budget.phase, 'budget');
-  const action = await run(fakePlatform({ session: () => ({ status: 'idle', stop_reason: { type: 'requires_action' } }) }));
+  const action = await run(fakePlatform({ session: () => ({ status: 'idle' }), stop: 'requires_action' }));
   assert.equal(action.phase, 'needs-action');
+  for (const stop of ['retries_exhausted', 'refusal']) {
+    const r = await run(fakePlatform({ session: () => ({ status: 'idle' }), stop }));
+    assert.equal(r.phase, 'failed');
+    assert.equal(r.text, '');
+  }
+});
+
+test('CW-16: a thread idle event with budget_reached does not stop the session; the session idle event decides', async () => {
+  const thread = { id: 'sevt_t1', type: 'session.thread_status_idle', stop_reason: { type: 'budget_reached' }, processed_at: '2026-11-20T10:04:00Z' };
+  const r = await run(fakePlatform({ session: () => idle(), events: [userMessageEvent, thread, idleEvent('end_turn')] }));
+  assert.equal(r.phase, 'done');
 });
 
 test('lastAgentText is empty without an agent message', () => {
@@ -734,7 +775,7 @@ function fakeGitHub({ labels = ['triage', 'origin:owner'], timeline, state = 'op
 
 function jobDeps(fg, text, over = {}) {
   const log = [];
-  const events = [{ type: 'agent.message', content: [{ type: 'text', text }] }];
+  const events = [userMessageEvent, { type: 'agent.message', content: [{ type: 'text', text }] }, idleEvent('end_turn')];
   const platform = fakePlatform({
     agents: [{ id: 'a1', name: `agents-${over.role || 'triage'}` }],
     environments: [{ id: 'e1', ...desiredEnvironments(settings).repo }, { id: 'e2', ...desiredEnvironments(settings).web }],
@@ -911,7 +952,8 @@ test('CW-8: an ask edited while the session ran makes the result stale: nothing 
 test('CW-16: a session stopped at its limit publishes nothing as the agent, whatever its last message says', async () => {
   const fg = fakeGitHub();
   const { deps, platform } = jobDeps(fg, block({ ...ROUTED, comment: 'Routed direct.' }));
-  platform.getSession = async () => ({ status: 'idle', stop_reason: { type: 'budget_reached' }, usage: { list_cost: { amount: '85', currency: 'USD' } } });
+  platform.getSession = async () => ({ status: 'idle', usage: { list_cost: { amount: '85', currency: 'USD' } } });
+  platform.listEvents = async () => [userMessageEvent, idleEvent('budget_reached')];
   await runForIssue(deps);
   assert.equal(fg.writes.filter((w) => w.who === 'agent').length, 0);
 });

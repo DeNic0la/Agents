@@ -7,11 +7,13 @@
 const { usdToBudget, costUsd, sessionPhase } = require('./client');
 const { desiredEnvironments, covers } = require('./sync');
 
-// Unconfirmed names of the beta, kept in one place.
+// Names of the beta, kept in one place. Documented (research note, "Sessions and events"): the
+// stop reasons on session.status_idle and the session's status values. Still open: the
+// `agent.message` event type and the `github_repository` resource type, which no listed doc
+// page settles yet.
 const AGENT_MESSAGE_EVENT = 'agent.message';
 const REPO_RESOURCE = 'github_repository';
 const POLL_MS = 15000;
-const STARTUP_GRACE_MS = 120000; // idle without a stop reason right after creation means not started yet
 const STOP_GRACE_MS = 120000; // how long an interrupted session gets to go idle
 
 class SetupError extends Error {
@@ -110,10 +112,12 @@ async function runSession({
     for (;;) {
       await sleep(POLL_MS);
       session = await client.getSession(id);
-      let phase = sessionPhase(session);
-      if (phase === 'done' && !session.stop_reason && now() - started < STARTUP_GRACE_MS) phase = 'running';
+      // The stop reason is on the events, so they are read once the session is idle or terminated.
+      const stopped = session.status === 'idle' || session.status === 'terminated';
+      const events = stopped ? await client.listEvents(id) : [];
+      const phase = stopped ? sessionPhase(session, events) : 'running';
       if (phase !== 'running') {
-        const text = phase === 'failed' ? '' : lastAgentText(await client.listEvents(id));
+        const text = phase === 'failed' ? '' : lastAgentText(events);
         return { id, link, phase: stoppedAt !== null && phase === 'done' ? 'timeout' : phase, costUsd: costUsd(session), text };
       }
       if (stoppedAt !== null) {
