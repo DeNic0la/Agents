@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const http = require('http');
 const path = require('path');
 
-const { createPlatformClient, PlatformError, usdToBudget, costUsd, sessionPhase } =
+const { createPlatformClient, PlatformError, usdToBudget, costUsd, sessionPhase, sessionRunning } =
   require(path.join(__dirname, '..', 'cloud/dispatcher/platform/client.js'));
 
 const KEY = 'sk-ant-secret-key';
@@ -88,10 +88,12 @@ test('listSessions follows pages and sends the filters', async () => {
   });
 });
 
-test('listEvents passes after; messages, interrupt and resources hit the right endpoints', async () => {
+test('listEvents sends no after parameter; messages, interrupt and resources hit the right endpoints', async () => {
   await withClient(() => [200, { data: [] }], async (client, calls) => {
-    await client.listEvents('s1', { after: 'ev9' });
-    assert.equal(new URL(calls[0].url, 'http://x').searchParams.get('after'), 'ev9');
+    await client.listEvents('s1');
+    const u = new URL(calls[0].url, 'http://x');
+    assert.equal(u.pathname, '/v1/sessions/s1/events');
+    assert.equal(u.searchParams.has('after'), false);
     await client.sendMessage('s1', 'hi');
     assert.deepEqual(calls[1].body, { events: [{ type: 'user.message', content: [{ type: 'text', text: 'hi' }] }] });
     await client.interrupt('s1');
@@ -149,10 +151,66 @@ test('pure helpers: usdToBudget, costUsd, sessionPhase', () => {
   assert.equal(usdToBudget(0.29), '29');
   assert.equal(costUsd({ usage: { list_cost: { amount: '125', currency: 'USD' } } }), 1.25);
   assert.equal(costUsd({}), 0);
-  assert.equal(sessionPhase({ status: 'running' }), 'running');
-  assert.equal(sessionPhase({ status: 'rescheduling' }), 'running');
-  assert.equal(sessionPhase({ status: 'idle', stop_reason: { type: 'end_turn' } }), 'done');
-  assert.equal(sessionPhase({ status: 'idle', stop_reason: { type: 'requires_action' } }), 'needs-action');
-  assert.equal(sessionPhase({ status: 'idle', stop_reason: { type: 'budget_reached' } }), 'budget');
-  assert.equal(sessionPhase({ status: 'terminated' }), 'failed');
+});
+
+// Event shape from https://platform.claude.com/docs/en/api/beta/sessions/events/list:
+// { id, type, stop_reason: { type }, processed_at } on session.status_idle.
+// Session shape from https://platform.claude.com/docs/en/api/beta/sessions/retrieve: no stop_reason.
+const userMessage = (id = 'sevt_u1') => ({ id, type: 'user.message', content: [{ type: 'text', text: 'task' }], processed_at: '2026-11-20T10:00:00Z' });
+const idleEvent = (reason, id = 'sevt_i1') => ({ id, type: 'session.status_idle', stop_reason: reason === undefined ? undefined : { type: reason }, processed_at: '2026-11-20T10:05:00Z' });
+const threadIdle = (reason) => ({ id: 'sevt_t1', type: 'session.thread_status_idle', stop_reason: { type: reason }, processed_at: '2026-11-20T10:04:00Z' });
+const phaseOf = (status, events) => sessionPhase({ id: 'sesn_1', status }, events);
+
+test('sessionPhase: running and rescheduling are running, with or without events', () => {
+  assert.equal(phaseOf('running', [userMessage()]), 'running');
+  assert.equal(phaseOf('rescheduling', [userMessage()]), 'running');
+  assert.equal(phaseOf('running', [userMessage(), idleEvent('end_turn')]), 'running');
+});
+
+test('sessionPhase: a fresh idle session with only its user.message is running', () => {
+  assert.equal(phaseOf('idle', [userMessage()]), 'running');
+  assert.equal(phaseOf('idle', []), 'running');
+  assert.equal(phaseOf('idle', undefined), 'running');
+});
+
+test('sessionPhase: an idle event from before the last user.message does not count', () => {
+  assert.equal(phaseOf('idle', [userMessage('a'), idleEvent('refusal'), userMessage('b')]), 'running');
+});
+
+test('sessionPhase: idle maps each stop reason to its phase', () => {
+  const after = (reason) => phaseOf('idle', [userMessage(), idleEvent(reason)]);
+  assert.equal(after('end_turn'), 'done');
+  assert.equal(after('requires_action'), 'needs-action');
+  assert.equal(after('budget_reached'), 'budget');
+  assert.equal(after('retries_exhausted'), 'failed');
+  assert.equal(after('refusal'), 'failed');
+  assert.equal(after('something_new'), 'failed');
+  assert.equal(after(undefined), 'failed');
+});
+
+test('sessionPhase: an end_turn after an interrupt is done (runSession maps it to timeout)', () => {
+  const events = [userMessage(), { id: '', type: 'user.interrupt' }, idleEvent('end_turn')];
+  assert.equal(phaseOf('idle', events), 'done');
+});
+
+test('sessionPhase: the last session.status_idle wins; thread idle events are ignored', () => {
+  assert.equal(phaseOf('idle', [userMessage(), idleEvent('requires_action', 'i1'), idleEvent('end_turn', 'i2')]), 'done');
+  assert.equal(phaseOf('idle', [userMessage(), threadIdle('budget_reached'), idleEvent('end_turn')]), 'done');
+  assert.equal(phaseOf('idle', [userMessage(), threadIdle('end_turn')]), 'running');
+});
+
+test('sessionPhase: terminated is done after end_turn, otherwise failed', () => {
+  assert.equal(phaseOf('terminated', [userMessage(), idleEvent('end_turn')]), 'done');
+  assert.equal(phaseOf('terminated', [userMessage(), idleEvent('refusal')]), 'failed');
+  assert.equal(phaseOf('terminated', [userMessage()]), 'failed');
+  assert.equal(phaseOf('terminated', undefined), 'failed');
+  // an end_turn that answered an earlier message doesn't count for the last one
+  assert.equal(phaseOf('terminated', [userMessage(), idleEvent('end_turn'), userMessage()]), 'failed');
+});
+
+test('sessionRunning is a status check: neither idle nor terminated', () => {
+  assert.equal(sessionRunning({ status: 'running' }), true);
+  assert.equal(sessionRunning({ status: 'rescheduling' }), true);
+  assert.equal(sessionRunning({ status: 'idle' }), false);
+  assert.equal(sessionRunning({ status: 'terminated' }), false);
 });

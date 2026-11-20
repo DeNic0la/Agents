@@ -17,7 +17,7 @@ const actions = require('./github/actions');
 const { readFacts, ROLES } = require('./decide');
 const L = require('./decide/labels');
 const { sessionsFor, stoppedPlan } = require('./decide/control');
-const { createPlatformClient, sessionPhase, costUsd } = require('./platform/client');
+const { createPlatformClient, sessionRunning, costUsd } = require('./platform/client');
 const { agentName } = require('./platform/session');
 const { scrubSecrets } = require('./decide/outcome');
 const { loadSettings } = require('./cli');
@@ -27,7 +27,7 @@ const RUN_CANCEL_WAIT_MS = 90000; // how long cancelled runs get to end before t
 const STOP_GRACE_MS = 120000; // how long an interrupted session gets to go idle
 // An ended session older than the longest a session may run can't be part of an open
 // request. A running one is kept at any age: its job may have died without stopping it.
-const recentEnough = (settings, now) => (s) => sessionPhase(s) === 'running'
+const recentEnough = (settings, now) => (s) => sessionRunning(s)
   || now() - Date.parse(s.created_at || 0) < (Number(settings.platform.sessionTimeoutMinutes) + 60) * 60000;
 
 // The platform's agent sessions of every role, newest first, mapped to { id, issue, role, createdAt, raw }.
@@ -48,7 +48,7 @@ async function agentSessions(platform, settings, now) {
 // Interrupts the running sessions and waits until each has ended or the grace has passed.
 // Returns the final view of every session it was given: { id, running, costUsd }.
 async function interruptAll(platform, sessions, { now, sleep, log }) {
-  const running = sessions.filter((s) => sessionPhase(s.raw) === 'running');
+  const running = sessions.filter((s) => sessionRunning(s.raw));
   for (const s of running) {
     try {
       await platform.interrupt(s.id);
@@ -69,9 +69,9 @@ async function interruptAll(platform, sessions, { now, sleep, log }) {
         log(`::warning::Could not read session ${id}: ${err.message}`);
       }
     }
-    open = open.filter((id) => sessionPhase(latest.get(id)) === 'running');
+    open = open.filter((id) => sessionRunning(latest.get(id)));
   }
-  return new Map([...latest].map(([id, raw]) => [id, { running: sessionPhase(raw) === 'running', costUsd: costUsd(raw) }]));
+  return new Map([...latest].map(([id, raw]) => [id, { running: sessionRunning(raw), costUsd: costUsd(raw) }]));
 }
 
 // Cancels the queued and running runs of the stoppable workflows and waits for them to end,
@@ -118,7 +118,7 @@ async function stopAll({ gh, platform, settings, now = Date.now, sleep = (ms) =>
   let ended = new Map();
   if (platform) {
     sessions = await agentSessions(platform, settings, now);
-    report.interrupted = sessions.filter((s) => sessionPhase(s.raw) === 'running').length;
+    report.interrupted = sessions.filter((s) => sessionRunning(s.raw)).length;
     ended = await interruptAll(platform, sessions, { now, sleep, log });
   } else {
     log('::warning::ANTHROPIC_API_KEY is not set: no platform session was interrupted.');
@@ -149,7 +149,7 @@ async function stopAll({ gh, platform, settings, now = Date.now, sleep = (ms) =>
   const scouts = sessions.filter((s) => s.role === 'scout');
   for (const s of scouts) matched.add(s.id);
   // A session no open request accounts for: interrupted all the same, named in the summary.
-  report.unmatched = sessions.filter((s) => !matched.has(s.id) && sessionPhase(s.raw) === 'running').map((s) => s.id);
+  report.unmatched = sessions.filter((s) => !matched.has(s.id) && sessionRunning(s.raw)).map((s) => s.id);
   // The dispatch workflow is off now, so the status issue is brought up to date here (CW-84).
   try {
     report.scouts = await recordScouts(gh, settings, open, scouts, ended, log);

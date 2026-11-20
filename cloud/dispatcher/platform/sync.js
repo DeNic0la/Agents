@@ -10,7 +10,7 @@ const AGENT_TOOLSET = 'agent_toolset_20260401';
 const SKILL_TYPE = 'custom';
 const SKILL_VERSION = 'latest';
 const WEB_NETWORKING = { type: 'unrestricted' }; // unconfirmed: networking of the web environment
-const DIGEST_LENGTH = 12; // hex characters of a skill digest kept in its title
+const DIGEST_LENGTH = 12; // hex characters of a skill digest kept in agent metadata
 
 const sha256 = (text) => crypto.createHash('sha256').update(text).digest('hex');
 
@@ -49,8 +49,25 @@ function parseDefinition(text, fileName) {
   };
 }
 
-// personaTexts: { name: file text }; skillIds: { name: skill id }
-function desiredAgent(def, settings, personaTexts, skillIds) {
+// The skills an agent uses, as `name=digest12` pairs sorted by name and joined with commas. The
+// platform keeps no content hash of a skill we can read, so each agent records the digest of
+// every skill it was built with. One pair is about 13 characters plus the name; a metadata
+// value may hold 512 (https://platform.claude.com/docs/en/api/beta/agents/create).
+function formatSkillsMeta(skillDigests, names) {
+  return [...names].sort().map((n) => `${n}=${skillDigests[n]}`).join(',');
+}
+
+function parseSkillsMeta(value) {
+  const out = {};
+  for (const pair of String(value || '').split(',')) {
+    const i = pair.indexOf('=');
+    if (i > 0) out[pair.slice(0, i)] = pair.slice(i + 1);
+  }
+  return out;
+}
+
+// personaTexts: { name: file text }; skillIds: { name: skill id }; skillDigests: { name: digest12 }
+function desiredAgent(def, settings, personaTexts, skillIds, skillDigests = {}) {
   const model = settings.models && settings.models[def.tier];
   if (!model) throw new Error(`${def.role}: no model for tier ${def.tier} in settings`);
   let system = def.body;
@@ -67,15 +84,24 @@ function desiredAgent(def, settings, personaTexts, skillIds) {
   const body = {
     name: AGENT_PREFIX + def.role, model, system, tools: [{ type: AGENT_TOOLSET }], skills,
   };
-  // the digest covers everything that is sent, so any change of the definition shows
-  const digest = sha256(JSON.stringify(body));
-  return { ...body, metadata: { role: def.role, source: `cloud/agents/${def.role}.md`, digest } };
+  const metadata = { role: def.role, source: `cloud/agents/${def.role}.md` };
+  if (def.skills.length) {
+    for (const s of def.skills) if (!skillDigests[s]) throw new Error(`${def.role}: skill ${s} has no digest`);
+    metadata.skills = formatSkillsMeta(skillDigests, def.skills);
+  }
+  // the digest covers everything that is sent and the skills recorded, so any change shows
+  metadata.digest = sha256(JSON.stringify({ ...body, skillsMeta: metadata.skills }));
+  return { ...body, metadata };
 }
+
+// A read returns the model as an object { id, speed, ... }; a create takes the id string.
+const modelId = (m) => (m && typeof m === 'object' ? m.id : m);
 
 function agentChanged(existing, desired) {
   const have = existing && existing.metadata && existing.metadata.digest;
   if (have) return have !== desired.metadata.digest;
-  return ['name', 'model', 'system', 'skills'].some((k) => JSON.stringify(existing && existing[k]) !== JSON.stringify(desired[k]));
+  if (modelId(existing && existing.model) !== modelId(desired.model)) return true;
+  return ['name', 'system', 'skills'].some((k) => JSON.stringify(existing && existing[k]) !== JSON.stringify(desired[k]));
 }
 
 function desiredEnvironments(settings) {
@@ -89,17 +115,76 @@ function desiredEnvironments(settings) {
   };
 }
 
-// A subset match: the platform may add fields to what we created, but a list (allowed
-// hosts) must match exactly, or an extra host would pass as unchanged.
-function covers(have, want) {
+const isPrimitive = (v) => v === null || typeof v !== 'object';
+
+// The first path where `have` doesn't cover `want`, or null. A subset match: the platform may
+// add fields to what we created. A list of primitives (allowed hosts) is a set: the same
+// members in any order, none extra and none missing, so an extra host is drift and a reordered
+// list is not. Other lists compare by position.
+function firstDifference(have, want, path = '') {
   if (Array.isArray(want)) {
-    return Array.isArray(have) && have.length === want.length && want.every((w, i) => covers(have[i], w));
+    if (!Array.isArray(have)) return path;
+    if (want.every(isPrimitive)) {
+      const same = have.length === want.length && have.every(isPrimitive) && want.every((w) => have.includes(w))
+        && have.every((h) => want.includes(h));
+      return same ? null : path;
+    }
+    if (have.length !== want.length) return path;
+    for (let i = 0; i < want.length; i += 1) {
+      const d = firstDifference(have[i], want[i], `${path}[${i}]`);
+      if (d !== null) return d;
+    }
+    return null;
   }
   if (want && typeof want === 'object') {
-    if (!have || typeof have !== 'object') return false;
-    return Object.keys(want).every((k) => covers(have[k], want[k]));
+    if (!have || typeof have !== 'object') return path;
+    for (const k of Object.keys(want)) {
+      const d = firstDifference(have[k], want[k], path ? `${path}.${k}` : k);
+      if (d !== null) return d;
+    }
+    return null;
   }
-  return have === want;
+  return have === want ? null : path;
+}
+
+const covers = (have, want) => firstDifference(have, want) === null;
+
+// Everything the sync will do, as data, so a read-only run is the plan without its writes.
+// presetSkills: { name: { digest } } of the skills the definitions use; environments, skills and
+// agents are the platform's lists. Throws on a duplicate display name, before any write.
+function planSync({ settings, definitions, personaTexts, presetSkills, environments, skills, agents }) {
+  const live = (list) => (list || []).filter((x) => !x.archived_at);
+  const envPlan = Object.entries(desiredEnvironments(settings)).map(([kind, want]) => {
+    const have = live(environments).find((e) => e.name === want.name);
+    if (!have) return { kind, want, action: 'create' };
+    const path = firstDifference(have, want);
+    return path === null ? { kind, want, action: 'unchanged' } : { kind, want, action: 'differs', path };
+  });
+
+  const ours = live(agents).filter((a) => String(a.name || '').startsWith(AGENT_PREFIX));
+  const recorded = ours.map((a) => parseSkillsMeta(a.metadata && a.metadata.skills));
+  const skillPlan = Object.entries(presetSkills).map(([name, { digest }]) => {
+    const found = (skills || []).filter((s) => s.display_name === name);
+    if (found.length > 1) {
+      throw new Error(`skill ${name}: ${found.length} custom skills have this display name (${found.map((s) => s.id).join(', ')}); delete or rename all but one, then run again`);
+    }
+    if (!found.length) return { name, digest, action: 'create' };
+    const id = found[0].id;
+    return { name, digest, id, action: recorded.some((r) => r[name] === digest) ? 'unchanged' : 'new-version' };
+  });
+
+  const bySkill = Object.fromEntries(skillPlan.map((s) => [s.name, s]));
+  const skillDigests = Object.fromEntries(skillPlan.map((s) => [s.name, s.digest]));
+  const agentPlan = definitions.map((def) => {
+    const have = ours.find((a) => a.name === AGENT_PREFIX + def.role);
+    if (!have) return { def, action: 'create' };
+    // A skill created in this run has no id yet, so the agent can't already reference it: always update.
+    if (def.skills.some((s) => bySkill[s].action === 'create')) return { def, id: have.id, version: have.version, action: 'update' };
+    const ids = Object.fromEntries(def.skills.map((s) => [s, bySkill[s].id]));
+    const want = desiredAgent(def, settings, personaTexts, ids, skillDigests);
+    return { def, id: have.id, version: have.version, action: agentChanged(have, want) ? 'update' : 'unchanged' };
+  });
+  return { environments: envPlan, skills: skillPlan, agents: agentPlan };
 }
 
 // files: [[path, content]] in any order
@@ -112,5 +197,6 @@ function skillDigest(files) {
 }
 
 module.exports = {
-  parseDefinition, desiredAgent, agentChanged, desiredEnvironments, covers, skillDigest, AGENT_PREFIX, DIGEST_LENGTH,
+  parseDefinition, desiredAgent, agentChanged, desiredEnvironments, covers, firstDifference, skillDigest,
+  formatSkillsMeta, parseSkillsMeta, planSync, AGENT_PREFIX, DIGEST_LENGTH,
 };

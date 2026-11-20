@@ -1,6 +1,6 @@
 # Cloud agent definitions
 
-One file per role. `sync-agents.js` turns each into a Managed Agents agent named `agents-<role>` on every merge to `main` (CW-101), so a session always uses the definitions of the commit on `main`. Changing anything here is `merge:human` (CW-95).
+One file per role. `sync-agents.js` turns each into a Managed Agents agent named `agents-<role>` on every merge to `main` (CW-101), so a session always uses the definitions of the commit on `main`. Changing anything here is `merge:human` (CW-95). The sync keeps using an existing custom skill whose `display_name` equals the preset skill's name and creates a skill only when none has that name. It uploads a new skill version only when the skill's files change, and writes nothing when nothing changed (D123).
 
 ## File format
 

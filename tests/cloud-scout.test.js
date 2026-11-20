@@ -220,8 +220,13 @@ function fakePlatform({ events = [], stop = 'end_turn', cents = 321, agents = [{
     listAgents: async () => agents,
     listEnvironments: async () => [{ id: 'env_w', ...desiredEnvironments(settings).web }],
     createSession: async (args) => { log.created.push(args); return { id: 'sesn_s', status: 'running' }; },
-    getSession: async () => ({ status: 'idle', stop_reason: { type: stop }, usage: { list_cost: { amount: String(cents), currency: 'USD' } } }),
-    listEvents: async () => events,
+    getSession: async () => ({ status: 'idle', usage: { list_cost: { amount: String(cents), currency: 'USD' } } }),
+    // Shapes: https://platform.claude.com/docs/en/api/beta/sessions/events/list (the stop reason is on the event)
+    listEvents: async () => [
+      { id: 'sevt_u1', type: 'user.message', content: [{ type: 'text', text: 'task' }], processed_at: '2026-11-20T10:00:00Z' },
+      ...events,
+      { id: 'sevt_i1', type: 'session.status_idle', stop_reason: { type: stop }, processed_at: '2026-11-20T10:05:00Z' },
+    ],
     listResources: async () => [],
     setResourceToken: async () => {},
     interrupt: async () => {},
