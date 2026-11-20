@@ -13,7 +13,10 @@ const LIST_FIELD = 'data'; // response field holding the items of a list
 const METADATA_FIELD = 'metadata'; // session create: free-form string map (unconfirmed)
 const ROTATE_METHOD = 'POST'; // method of the resource token rotation call (unconfirmed)
 const SKILL_FILES_FIELD = 'files[]'; // skill upload: multipart field that carries each file
-const SKILL_TITLE_FIELD = 'display_title'; // skill upload: form field and list field with the title (unconfirmed)
+// Skills: https://platform.claude.com/docs/en/api/skills/create (display_name is optional; without it
+// the platform derives it from the SKILL.md name) and
+// https://platform.claude.com/docs/en/api/skills/versions/create (files only).
+const SKILL_NAME_FIELD = 'display_name'; // skill create: form field; skill list: field with the name
 
 class PlatformError extends Error {
   constructor(status, path, message) {
@@ -148,17 +151,19 @@ function createPlatformClient({
   }
 
   // files: [[path, content]]; every path starts with the one top-level skill folder.
-  function skillForm(files, title) {
+  function skillForm(files, displayName) {
     const form = new FormData();
-    if (title) form.set(SKILL_TITLE_FIELD, title);
+    if (displayName) form.set(SKILL_NAME_FIELD, displayName);
     for (const [filePath, content] of files) form.append(SKILL_FILES_FIELD, new Blob([content]), filePath);
     return form;
   }
 
   return {
-    listSkills: () => listAll('/v1/skills'),
-    createSkill: (files, title) => request('POST', '/v1/skills', skillForm(files, title)),
-    createSkillVersion: (id, files, title) => request('POST', `/v1/skills/${id}/versions`, skillForm(files, title)),
+    // source=custom: only the skills this account created, not Anthropic's
+    listSkills: () => listAll('/v1/skills', { source: 'custom' }),
+    createSkill: (files, displayName) => request('POST', '/v1/skills', skillForm(files, displayName)),
+    // a version takes files only; it can't set a display name
+    createSkillVersion: (id, files) => request('POST', `/v1/skills/${id}/versions`, skillForm(files)),
     listAgents: () => listAll('/v1/agents'),
     getAgent: (id) => request('GET', `/v1/agents/${id}`),
     createAgent: (body) => request('POST', '/v1/agents', body),
@@ -186,4 +191,4 @@ function createPlatformClient({
   };
 }
 
-module.exports = { createPlatformClient, SKILL_TITLE_FIELD, PlatformError, usdToBudget, costUsd, sessionPhase, sessionRunning };
+module.exports = { createPlatformClient, SKILL_NAME_FIELD, PlatformError, usdToBudget, costUsd, sessionPhase, sessionRunning };

@@ -1,6 +1,9 @@
 'use strict';
 // Sync of cloud/agents/*.md to Managed Agents agents named agents-<role> (CW-101): run on every
 // merge to main, so a session always uses the definitions of the commit on main.
+// The sync reads the platform first, plans as a pure function (platform/sync.js planSync), and
+// then applies the plan. With SYNC_READ_ONLY=true (the manual run's read_only input) it stops
+// after logging the plan and sends only GET requests.
 const fs = require('fs');
 const path = require('path');
 const { createPlatformClient } = require('./platform/client.js');
@@ -25,32 +28,54 @@ const realIo = {
   },
 };
 
-async function ensureEnvironments(client, settings, log) {
-  const existing = await client.listEnvironments();
-  for (const [kind, want] of Object.entries(sync.desiredEnvironments(settings))) {
-    const have = existing.find((e) => e.name === want.name);
-    if (!have) {
-      await client.createEnvironment(want);
-      log(`environment ${want.name} (${kind}): created`);
-    } else if (!sync.covers(have, want)) {
-      log(`::warning::environment ${want.name} (${kind}) differs from the settings; left as it is, and no session starts in it until it matches`);
-    } else {
-      log(`environment ${want.name} (${kind}): unchanged`);
-    }
-  }
-}
-
-async function ensureSkill(client, name, existingSkills, io, log) {
+function readPresetSkill(name, io) {
   const root = `preset/skills/${name}`;
   const files = io.listTree(root).map((p) => [p.slice('preset/skills/'.length), io.readText(p)]);
   if (!files.length) throw new Error(`skill ${name}: no files under ${root}`);
-  const digest = sync.skillDigest(files).slice(0, sync.DIGEST_LENGTH);
-  const title = `${sync.AGENT_PREFIX}${name} ${digest}`;
-  const have = existingSkills.find((s) => (s.display_title || '').startsWith(`${sync.AGENT_PREFIX}${name} `));
-  if (have && have.display_title === title) return have.id;
-  const res = have ? await client.createSkillVersion(have.id, files, title) : await client.createSkill(files, title);
-  log(`skill ${name}: ${have ? 'new version' : 'created'}`);
-  return (have && have.id) || res.id;
+  return { files, digest: sync.skillDigest(files).slice(0, sync.DIGEST_LENGTH) };
+}
+
+// Logs the plan in the verbs of its mode; `would ...` when nothing is written.
+function logPlan(plan, readOnly, log) {
+  const verb = (done, would) => (readOnly ? would : done);
+  for (const e of plan.environments) {
+    const label = `environment ${e.want.name} (${e.kind})`;
+    if (e.action === 'create') log(`${label}: ${verb('created', 'would create')}`);
+    else if (e.action === 'unchanged') log(`${label}: unchanged`);
+    else log(`::warning::${label} differs from the settings at ${e.path}; left as it is, and no session starts in it until it matches`);
+  }
+  for (const s of plan.skills) {
+    if (s.action === 'create') log(`skill ${s.name}: ${verb('created', 'would create')}`);
+    else if (s.action === 'new-version') log(`skill ${s.name}: ${readOnly ? `would upload a new version to ${s.id}` : `new version (${s.id})`}`);
+    else log(`skill ${s.name}: unchanged (${s.id})`);
+  }
+  for (const a of plan.agents) {
+    const label = `agent ${sync.AGENT_PREFIX}${a.def.role}`;
+    if (a.action === 'create') log(`${label}: ${verb('created', 'would create')}`);
+    else if (a.action === 'update') log(`${label}: ${verb('updated', 'would update')}`);
+    else log(`${label}: unchanged`);
+  }
+}
+
+// Environments, then skills (collecting their ids), then agents.
+async function applyPlan({ client, plan, presetSkills, settings, personaTexts, log }) {
+  for (const e of plan.environments) if (e.action === 'create') await client.createEnvironment(e.want);
+  const skillIds = {};
+  const skillDigests = {};
+  for (const s of plan.skills) {
+    skillDigests[s.name] = s.digest;
+    if (s.action === 'create') skillIds[s.name] = (await client.createSkill(presetSkills[s.name].files, s.name)).id;
+    else {
+      skillIds[s.name] = s.id;
+      if (s.action === 'new-version') await client.createSkillVersion(s.id, presetSkills[s.name].files);
+    }
+  }
+  for (const a of plan.agents) {
+    if (a.action === 'unchanged') continue;
+    const want = sync.desiredAgent(a.def, settings, personaTexts, skillIds, skillDigests);
+    if (a.action === 'create') await client.createAgent(want);
+    else await client.updateAgent(a.id, a.version, want);
+  }
 }
 
 // io: { readText(rel), listDir(rel), listTree(rel) } relative to the repo root
@@ -74,28 +99,21 @@ async function main({ client, io = realIo, env = process.env, settings, log = co
   const personaTexts = {};
   for (const p of new Set(defs.flatMap((d) => d.personas))) personaTexts[p] = io.readText(`preset/agents/${p}.md`);
 
-  await ensureEnvironments(client, settings, log);
+  const presetSkills = {};
+  for (const name of new Set(defs.flatMap((x) => x.skills))) presetSkills[name] = readPresetSkill(name, io);
 
-  const existingSkills = await client.listSkills();
-  const skillIds = {};
-  for (const name of new Set(defs.flatMap((d) => d.skills))) {
-    skillIds[name] = await ensureSkill(client, name, existingSkills, io, log);
-  }
+  // read everything first; nothing is written before the plan is made
+  const [environments, skills, agents] = await Promise.all([client.listEnvironments(), client.listSkills(), client.listAgents()]);
+  for (const s of skills) log(`custom skill: ${s.display_name} (${s.id})`);
+  const plan = sync.planSync({ settings, definitions: defs, personaTexts, presetSkills, environments, skills, agents });
 
-  const agents = await client.listAgents();
-  for (const def of defs) {
-    const want = sync.desiredAgent(def, settings, personaTexts, skillIds);
-    const have = agents.find((a) => a.name === want.name);
-    if (!have) {
-      await client.createAgent(want);
-      log(`agent ${want.name}: created`);
-    } else if (sync.agentChanged(have, want)) {
-      await client.updateAgent(have.id, have.version, want);
-      log(`agent ${want.name}: updated`);
-    } else {
-      log(`agent ${want.name}: unchanged`);
-    }
+  const readOnly = env.SYNC_READ_ONLY === 'true';
+  logPlan(plan, readOnly, log);
+  if (readOnly) {
+    log('read-only: nothing written');
+    return 0;
   }
+  await applyPlan({ client, plan, presetSkills, settings, personaTexts, log });
   return 0;
 }
 

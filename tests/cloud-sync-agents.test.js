@@ -10,7 +10,7 @@ const path = require('path');
 const root = path.join(__dirname, '..');
 const sync = require(path.join(root, 'cloud/dispatcher/platform/sync.js'));
 const { main } = require(path.join(root, 'cloud/dispatcher/sync-agents.js'));
-const { createPlatformClient, SKILL_TITLE_FIELD } = require(path.join(root, 'cloud/dispatcher/platform/client.js'));
+const { createPlatformClient, SKILL_NAME_FIELD } = require(path.join(root, 'cloud/dispatcher/platform/client.js'));
 
 const settings = JSON.parse(fs.readFileSync(path.join(root, 'cloud/settings.json'), 'utf8'));
 
@@ -73,7 +73,7 @@ test('CW-101: bad frontmatter is an error', () => {
 
 test('CW-101: desiredAgent maps the tier to a model and appends personas without their frontmatter', () => {
   const def = sync.parseDefinition(DEF, 'demo.md');
-  const want = sync.desiredAgent(def, settings, { wise: '---\nname: wise\n---\nBe wise.\n' }, { alpha: 'skill_a', beta: 'skill_b' });
+  const want = sync.desiredAgent(def, settings, { wise: '---\nname: wise\n---\nBe wise.\n' }, { alpha: 'skill_a', beta: 'skill_b' }, { alpha: 'aaaaaaaaaaaa', beta: 'bbbbbbbbbbbb' });
   assert.equal(want.name, 'agents-demo');
   assert.equal(want.model, settings.models.deep);
   assert.equal(want.system, 'You are demo.\n\n## Persona: wise\n\nBe wise.');
@@ -91,9 +91,10 @@ test('CW-101: agentChanged compares the digest, and the fields when there is non
   const def = sync.parseDefinition(DEF, 'demo.md');
   const ids = { alpha: 'a', beta: 'b' };
   const texts = { wise: 'Be wise.' };
-  const want = sync.desiredAgent(def, settings, texts, ids);
+  const dg = { alpha: 'aaaaaaaaaaaa', beta: 'bbbbbbbbbbbb' };
+  const want = sync.desiredAgent(def, settings, texts, ids, dg);
   assert.equal(sync.agentChanged({ ...want, id: 'agent_1', version: 3 }, want), false);
-  const other = sync.desiredAgent({ ...def, body: 'Changed.' }, settings, texts, ids);
+  const other = sync.desiredAgent({ ...def, body: 'Changed.' }, settings, texts, ids, dg);
   assert.equal(sync.agentChanged(want, other), true);
   const noDigest = { ...want, metadata: {} };
   assert.equal(sync.agentChanged(noDigest, want), false);
@@ -118,40 +119,60 @@ test('CW-101: skillDigest ignores the order and sees path and content changes', 
   assert.notEqual(sync.skillDigest(a), sync.skillDigest([['s/SKILL.md', 'x'], ['s/references/q.md', 'y']]));
 });
 
-// An in-memory platform behind a fetch function; records every call.
+// An in-memory platform behind a fetch function. The shapes follow the documentation, with the
+// field names written out here and not taken from the code under test; it records every request.
+//   Skill list/create: https://platform.claude.com/docs/en/api/skills/create
+//   SkillVersion: https://platform.claude.com/docs/en/api/skills/versions/create
+//   Agents (a read returns model as an object): https://platform.claude.com/docs/en/api/beta/agents
+// A list response is { data: [...], next_page: null }.
 function fakePlatform() {
-  const state = { agents: [], environments: [], skills: [], calls: [] };
+  const state = { agents: [], environments: [], skills: [], calls: [], requests: [], forms: [] };
   let n = 0;
   const reply = (data, status = 200) => ({ ok: status < 300, status, statusText: '', text: async () => JSON.stringify(data) });
+  const skillName = (form) => {
+    const f = form.getAll('files[]').find((x) => /(^|\/)SKILL\.md$/.test(x.name));
+    return f ? f.__text.match(/^name:\s*(.+)$/m)[1].trim() : undefined;
+  };
   const fetchImpl = async (url, init) => {
-    const p = new URL(url).pathname;
+    const u = new URL(url);
+    const p = u.pathname;
     state.calls.push(`${init.method} ${p}`);
-    const body = init.body && typeof init.body === 'string' ? JSON.parse(init.body) : init.body;
+    state.requests.push({ method: init.method, url: String(url) });
+    let body = init.body && typeof init.body === 'string' ? JSON.parse(init.body) : init.body;
     if (init.method === 'GET') {
-      return reply({ data: { '/v1/agents': state.agents, '/v1/environments': state.environments, '/v1/skills': state.skills }[p] });
+      const all = { '/v1/agents': state.agents, '/v1/environments': state.environments, '/v1/skills': state.skills }[p];
+      return reply({ data: all || [], next_page: null });
+    }
+    if (body instanceof FormData) {
+      for (const f of body.getAll('files[]')) f.__text = await f.text();
+      state.forms.push({ path: p, keys: [...new Set([...body.keys()])] });
     }
     if (p === '/v1/skills') {
-      const s = { id: `skill_${++n}`, display_title: body.get(SKILL_TITLE_FIELD) };
+      const s = {
+        type: 'skill', id: `skill_${++n}`, display_name: body.get('display_name') || skillName(body),
+        latest_version_id: `skillver_${++n}`, source: { type: 'custom' }, created_at: 't', updated_at: 't',
+      };
       state.skills.push(s);
       return reply(s);
     }
     if (p.startsWith('/v1/skills/')) {
       const s = state.skills.find((x) => p.includes(x.id));
-      s.display_title = body.get(SKILL_TITLE_FIELD);
-      return reply(s);
+      s.latest_version_id = `skillver_${++n}`;
+      return reply({ type: 'skill_version', id: s.latest_version_id, skill_id: s.id, name: s.display_name, description: 'd', created_at: 't' });
     }
     if (p === '/v1/environments') {
       const e = { id: `env_${++n}`, ...body };
       state.environments.push(e);
       return reply(e);
     }
+    const asRead = (b) => ({ ...b, ...(typeof b.model === 'string' ? { model: { id: b.model, speed: 'standard' } } : {}) });
     if (p === '/v1/agents') {
-      const a = { id: `agent_${++n}`, version: 1, ...body };
+      const a = { id: `agent_${++n}`, version: 1, ...asRead(body) };
       state.agents.push(a);
       return reply(a);
     }
     const a = state.agents.find((x) => p === `/v1/agents/${x.id}`);
-    Object.assign(a, body, { version: a.version + 1 });
+    Object.assign(a, asRead(body), { version: a.version + 1 });
     return reply(a);
   };
   return { state, fetchImpl };
@@ -174,16 +195,16 @@ const REPO = {
   'cloud/agents/demo.md': DEF,
   'cloud/agents/quick.md': '---\nrole: quick\ntier: fast\nskills: []\npersonas: []\nenvironment: web\n---\nQuick.\n',
   'preset/agents/wise.md': '---\nname: wise\n---\nBe wise.\n',
-  'preset/skills/alpha/SKILL.md': 'alpha',
+  'preset/skills/alpha/SKILL.md': '---\nname: alpha\ndescription: a\n---\nalpha',
   'preset/skills/alpha/references/r.md': 'ref',
-  'preset/skills/beta/SKILL.md': 'beta',
+  'preset/skills/beta/SKILL.md': '---\nname: beta\ndescription: b\n---\nbeta',
 };
 
-function run(plat, files, mode) {
+function run(plat, files, mode, extraEnv = {}) {
   const lines = [];
   const client = createPlatformClient({ apiKey: 'k', apiUrl: 'http://x', fetchImpl: plat.fetchImpl, sleep: async () => {} });
   return main({
-    client, io: fakeIo(files), env: { ANTHROPIC_API_KEY: 'k' }, settings: { ...settings, mode }, log: (l) => lines.push(l),
+    client, io: fakeIo(files), env: { ANTHROPIC_API_KEY: 'k', ...extraEnv }, settings: { ...settings, mode }, log: (l) => lines.push(l),
   }).then((code) => ({ code, lines }));
 }
 
@@ -202,35 +223,170 @@ test('CW-101: the live mode fails when the key is not set', async () => {
   assert.match(lines[0], /ANTHROPIC_API_KEY is not set/);
 });
 
-test('CW-101: a full sync creates environments, skills and agents, and a second run changes nothing', async () => {
+// CK-8
+test('CK-8: firstDifference names the path, and arrays of primitives compare as sets', () => {
+  const want = { config: { networking: { type: 'limited', allowed_hosts: ['a', 'b'] } } };
+  const have = (hosts) => ({ id: 'x', config: { networking: { type: 'limited', allowed_hosts: hosts, more: 1 } } });
+  assert.equal(sync.firstDifference(have(['b', 'a']), want), null);
+  assert.equal(sync.covers(have(['b', 'a']), want), true);
+  assert.equal(sync.firstDifference(have(['a', 'b', 'c']), want), 'config.networking.allowed_hosts');
+  assert.equal(sync.firstDifference(have(['a']), want), 'config.networking.allowed_hosts');
+  assert.equal(sync.covers(have(['a', 'c']), want), false);
+  assert.equal(sync.firstDifference({ config: { networking: { type: 'unrestricted' } } }, want), 'config.networking.type');
+  assert.equal(sync.firstDifference({}, { a: { b: 1 } }), 'a');
+  assert.equal(sync.firstDifference([{ x: 1 }, { x: 2 }], [{ x: 1 }, { x: 3 }]), '[1].x');
+});
+
+test('CK-8: the agent fallback treats a model object and its id string as the same model', () => {
+  const def = sync.parseDefinition(DEF, 'demo.md');
+  const want = sync.desiredAgent(def, settings, { wise: 'Be wise.' }, { alpha: 'a', beta: 'b' }, { alpha: 'x', beta: 'y' });
+  const noDigest = { ...want, metadata: {} };
+  const asObject = { ...noDigest, model: { id: want.model, speed: 'standard', effort: null, inference_geo: null } };
+  assert.equal(sync.agentChanged(asObject, want), false);
+  assert.equal(sync.agentChanged({ ...asObject, model: { id: 'other' } }, want), true);
+});
+
+test('CK-3: desiredAgent records the skills as sorted name=digest pairs and the digest covers them', () => {
+  const def = sync.parseDefinition(DEF, 'demo.md');
+  const ids = { alpha: 'a', beta: 'b' };
+  const digests = { beta: 'bbbbbbbbbbbb', alpha: 'aaaaaaaaaaaa' };
+  const want = sync.desiredAgent(def, settings, { wise: 'Be wise.' }, ids, digests);
+  assert.equal(want.metadata.skills, 'alpha=aaaaaaaaaaaa,beta=bbbbbbbbbbbb');
+  assert.ok(want.metadata.skills.length <= 512);
+  for (const v of Object.values(want.metadata)) assert.ok(String(v).length <= 512);
+  assert.deepEqual(sync.parseSkillsMeta(want.metadata.skills), { alpha: 'aaaaaaaaaaaa', beta: 'bbbbbbbbbbbb' });
+  const other = sync.desiredAgent(def, settings, { wise: 'Be wise.' }, ids, { ...digests, alpha: 'cccccccccccc' });
+  assert.notEqual(want.metadata.digest, other.metadata.digest);
+  assert.equal(sync.agentChanged(want, other), true);
+  const quick = sync.parseDefinition('---\nrole: quick\ntier: fast\nskills: []\npersonas: []\nenvironment: web\n---\nQ\n', 'quick.md');
+  assert.equal('skills' in sync.desiredAgent(quick, settings, {}, {}, {}).metadata, false);
+});
+
+// The skill list the first live run left: custom skills named after their SKILL.md name
+// (https://platform.claude.com/docs/en/api/skills/create).
+// the field name the API doesn't have; written in two parts so the repo never names it as a field
+const OLD_TITLE_FIELD = 'display_' + 'title';
+const seededSkill = (name, id) => ({
+  type: 'skill', id, display_name: name, latest_version_id: `ver_${id}`, source: { type: 'custom' }, created_at: 't', updated_at: 't',
+});
+const seedFirstRun = (plat) => plat.state.skills.push(seededSkill('alpha', 'skill_seed_a'), seededSkill('beta', 'skill_seed_b'));
+const writes = (plat) => plat.state.calls.filter((c) => !c.startsWith('GET'));
+const FULL_UNCHANGED = [
+  'skill alpha: unchanged (skill_seed_a)', 'skill beta: unchanged (skill_seed_b)',
+  'agent agents-demo: unchanged', 'agent agents-quick: unchanged',
+];
+
+test('CK-1: seeded with the skills of the first live run, the sync creates none and uploads one version each', async () => {
   const plat = fakePlatform();
-  const first = await run(plat, REPO, 'live');
-  assert.equal(first.code, 0);
-  assert.equal(plat.state.environments.length, 2);
+  seedFirstRun(plat);
+  const res = await run(plat, REPO, 'live');
+  assert.equal(res.code, 0);
+  assert.ok(!plat.state.calls.includes('POST /v1/skills'), plat.state.calls.join('\n'));
+  assert.equal(plat.state.calls.filter((c) => c === 'POST /v1/skills/skill_seed_a/versions').length, 1);
+  assert.equal(plat.state.calls.filter((c) => c === 'POST /v1/skills/skill_seed_b/versions').length, 1);
   assert.equal(plat.state.skills.length, 2);
   assert.equal(plat.state.agents.length, 2);
-  assert.ok(first.lines.includes('agent agents-demo: created'));
-  assert.ok(first.lines.includes('agent agents-quick: created'));
+  assert.ok(res.lines.includes('skill alpha: new version (skill_seed_a)'), res.lines.join('\n'));
+  assert.ok(res.lines.includes('agent agents-demo: created'));
   const demo = plat.state.agents.find((a) => a.name === 'agents-demo');
-  assert.equal(demo.skills.length, 2);
-  assert.match(plat.state.skills[0].display_title, /^agents-alpha [0-9a-f]{12}$/);
-  assert.ok(!first.lines.join('\n').includes('"k"'));
+  assert.deepEqual(demo.skills.map((s) => s.skill_id), ['skill_seed_a', 'skill_seed_b']);
+  assert.ok(!res.lines.join('\n').includes('"k"'));
+});
 
+test('CK-1: against an empty platform the sync creates each skill under its name', async () => {
+  const plat = fakePlatform();
+  const res = await run(plat, REPO, 'live');
+  assert.equal(res.code, 0);
+  assert.equal(plat.state.environments.length, 2);
+  assert.deepEqual(plat.state.skills.map((s) => s.display_name), ['alpha', 'beta']);
+  assert.ok(res.lines.includes('skill alpha: created'));
+  assert.ok(res.lines.includes('agent agents-quick: created'));
+});
+
+test('CK-2: a second run sends only GET requests and logs every item as unchanged', async () => {
+  const plat = fakePlatform();
+  seedFirstRun(plat);
+  await run(plat, REPO, 'live');
   plat.state.calls.length = 0;
   const second = await run(plat, REPO, 'live');
   assert.equal(second.code, 0);
-  assert.deepEqual(plat.state.calls.filter((c) => !c.startsWith('GET')), []);
-  assert.ok(second.lines.includes('agent agents-demo: unchanged'));
-  assert.ok(second.lines.includes('agent agents-quick: unchanged'));
+  assert.deepEqual(writes(plat), []);
+  for (const line of FULL_UNCHANGED) assert.ok(second.lines.includes(line), `${line}\n${second.lines.join('\n')}`);
+  for (const kind of ['repo', 'web']) {
+    const want = sync.desiredEnvironments(settings)[kind];
+    assert.ok(second.lines.includes(`environment ${want.name} (${kind}): unchanged`));
+  }
+});
 
-  // a changed prompt updates only that agent; a changed skill file uploads a new version of that skill
+test('CK-3: a changed skill file gives one version and one update of each agent that uses it; then nothing', async () => {
+  const plat = fakePlatform();
+  await run(plat, REPO, 'live');
+  const changed = { ...REPO, 'preset/skills/beta/SKILL.md': REPO['preset/skills/beta/SKILL.md'] + ' more' };
   plat.state.calls.length = 0;
-  const changed = { ...REPO, 'cloud/agents/quick.md': REPO['cloud/agents/quick.md'].replace('Quick.', 'Quicker.'), 'preset/skills/beta/SKILL.md': 'beta2' };
+  const second = await run(plat, changed, 'live');
+  const betaId = plat.state.skills.find((s) => s.display_name === 'beta').id;
+  const demoId = plat.state.agents.find((a) => a.name === 'agents-demo').id;
+  assert.deepEqual(writes(plat), [`POST /v1/skills/${betaId}/versions`, `POST /v1/agents/${demoId}`]);
+  assert.ok(second.lines.includes(`skill beta: new version (${betaId})`));
+  assert.ok(second.lines.includes('agent agents-demo: updated'));
+  assert.ok(second.lines.includes('agent agents-quick: unchanged'));
+  plat.state.calls.length = 0;
   const third = await run(plat, changed, 'live');
-  assert.ok(third.lines.includes('agent agents-quick: updated'));
-  assert.ok(third.lines.includes('agent agents-demo: unchanged'));
-  assert.ok(third.lines.includes('skill beta: new version'));
-  assert.equal(plat.state.calls.filter((c) => c.startsWith('POST /v1/skills/')).length, 1);
+  assert.deepEqual(writes(plat), []);
+  assert.ok(third.lines.includes(`skill beta: unchanged (${betaId})`));
+});
+
+test('CK-3: a changed prompt updates only that agent', async () => {
+  const plat = fakePlatform();
+  await run(plat, REPO, 'live');
+  plat.state.calls.length = 0;
+  const changed = { ...REPO, 'cloud/agents/quick.md': REPO['cloud/agents/quick.md'].replace('Quick.', 'Quicker.') };
+  const res = await run(plat, changed, 'live');
+  assert.ok(res.lines.includes('agent agents-quick: updated'));
+  assert.ok(res.lines.includes('agent agents-demo: unchanged'));
+  assert.equal(writes(plat).length, 1);
+});
+
+test('CK-4: two custom skills with one display name stop the sync before any write, naming both ids', async () => {
+  const plat = fakePlatform();
+  plat.state.skills.push(seededSkill('alpha', 'skill_dup_1'), seededSkill('alpha', 'skill_dup_2'));
+  const res = await run(plat, REPO, 'live').catch((err) => ({ code: 1, error: err }));
+  if (res.error) {
+    assert.match(res.error.message, /alpha/);
+    assert.match(res.error.message, /skill_dup_1/);
+    assert.match(res.error.message, /skill_dup_2/);
+  } else {
+    assert.equal(res.code, 1);
+    assert.match(res.lines.join('\n'), /skill_dup_1[\s\S]*skill_dup_2|skill_dup_2[\s\S]*skill_dup_1/);
+  }
+  assert.deepEqual(writes(plat), []);
+});
+
+test('CK-5: the log lists each custom skill and an environment drift names its field', async () => {
+  const plat = fakePlatform();
+  seedFirstRun(plat);
+  const want = sync.desiredEnvironments(settings).repo;
+  plat.state.environments.push({
+    id: 'env_x', name: want.name,
+    config: { ...want.config, networking: { ...want.config.networking, allowed_hosts: [...want.config.networking.allowed_hosts, 'evil.example'] } },
+  });
+  const res = await run(plat, REPO, 'live');
+  assert.ok(res.lines.includes('custom skill: alpha (skill_seed_a)'), res.lines.join('\n'));
+  assert.ok(res.lines.includes('custom skill: beta (skill_seed_b)'));
+  const warning = res.lines.find((l) => l.startsWith('::warning::'));
+  assert.ok(warning && warning.includes(want.name) && warning.includes('config.networking.allowed_hosts'), res.lines.join('\n'));
+  assert.equal(plat.state.environments.length, 2); // drift is left as it is, the web environment is created
+});
+
+test('CK-8: an environment whose hosts the platform reordered is unchanged', async () => {
+  const want = sync.desiredEnvironments(settings).repo;
+  const plat = fakePlatform();
+  plat.state.environments.push({
+    id: 'env_x', name: want.name,
+    config: { ...want.config, networking: { ...want.config.networking, allowed_hosts: [...want.config.networking.allowed_hosts].reverse() } },
+  });
+  const res = await run(plat, REPO, 'live');
+  assert.ok(res.lines.includes(`environment ${want.name} (repo): unchanged`), res.lines.join('\n'));
 });
 
 test('CW-101: an environment that exists but differs is warned about and left alone', async () => {
@@ -242,39 +398,83 @@ test('CW-101: an environment that exists but differs is warned about and left al
   assert.equal(plat.state.environments[0].config.networking.type, 'unrestricted');
 });
 
-test('CW-91, CW-101: an environment with one allowed host more than the settings is drift, not unchanged', async () => {
-  const want = sync.desiredEnvironments(settings).repo;
-  const hosts = want.config.networking.allowed_hosts;
-  const withHosts = (list) => ({ id: 'env_x', name: want.name, config: { ...want.config, networking: { ...want.config.networking, allowed_hosts: list } } });
-  const extra = fakePlatform();
-  extra.state.environments.push(withHosts([...hosts, 'evil.example']));
-  const res = await run(extra, REPO, 'live');
-  assert.ok(res.lines.some((l) => l.startsWith('::warning::') && l.includes(want.name)), res.lines.join('\n'));
-  const same = fakePlatform();
-  same.state.environments.push(withHosts([...hosts]));
-  const ok = await run(same, REPO, 'live');
-  assert.ok(ok.lines.includes(`environment ${want.name} (repo): unchanged`), ok.lines.join('\n'));
+test('CK-6: a read-only run on an empty platform sends only GET and says what it would create', async () => {
+  const plat = fakePlatform();
+  const res = await run(plat, REPO, 'live', { SYNC_READ_ONLY: 'true' });
+  assert.equal(res.code, 0);
+  assert.deepEqual(writes(plat), []);
+  assert.ok(plat.state.calls.length >= 3);
+  assert.ok(res.lines.includes('skill alpha: would create'), res.lines.join('\n'));
+  assert.ok(res.lines.includes('agent agents-demo: would create'));
+  assert.ok(res.lines.some((l) => /^environment .*: would create$/.test(l)));
+  assert.equal(res.lines[res.lines.length - 1], 'read-only: nothing written');
 });
 
-test('CW-101: the client uploads a skill as multipart with files[] named by their paths', async () => {
+test('CK-6: a read-only run on the first-run seed says it would upload a version', async () => {
+  const plat = fakePlatform();
+  seedFirstRun(plat);
+  const res = await run(plat, REPO, 'live', { SYNC_READ_ONLY: 'true' });
+  assert.deepEqual(writes(plat), []);
+  assert.ok(res.lines.includes('skill alpha: would upload a new version to skill_seed_a'), res.lines.join('\n'));
+  assert.ok(res.lines.includes('read-only: nothing written'));
+});
+
+test('CK-6: after a sync, a read-only run reports would update only for a changed agent', async () => {
+  const plat = fakePlatform();
+  await run(plat, REPO, 'live');
+  plat.state.calls.length = 0;
+  const changed = { ...REPO, 'cloud/agents/quick.md': REPO['cloud/agents/quick.md'].replace('Quick.', 'Quicker.') };
+  const res = await run(plat, changed, 'live', { SYNC_READ_ONLY: 'true' });
+  assert.deepEqual(writes(plat), []);
+  assert.ok(res.lines.includes('agent agents-quick: would update'));
+  assert.ok(res.lines.includes('agent agents-demo: unchanged'));
+});
+
+test('CK-6: only the string true turns read-only on', async () => {
+  for (const value of ['', 'false', undefined]) {
+    const plat = fakePlatform();
+    const res = await run(plat, REPO, 'live', { SYNC_READ_ONLY: value });
+    assert.ok(writes(plat).length > 0, `value ${value}`);
+    assert.ok(!res.lines.includes('read-only: nothing written'));
+  }
+});
+
+test('HR-1: the sync sends display_name on a create, and no title field anywhere', async () => {
+  const plat2 = fakePlatform();
+  await run(plat2, REPO, 'live');
+  const created = plat2.state.forms.filter((f) => f.path === '/v1/skills');
+  assert.equal(created.length, 2);
+  for (const f of created) assert.deepEqual(f.keys.sort(), ['display_name', 'files[]']);
+  for (const r of plat2.state.requests) assert.ok(!new RegExp(OLD_TITLE_FIELD + '|[?&]after=').test(r.url), r.url);
+  assert.ok(plat2.state.requests.some((r) => r.method === 'GET' && r.url.includes('/v1/skills') && r.url.includes('source=custom')));
+});
+
+test('HR-1: the client sends display_name on a create and only files on a version upload', async () => {
   const seen = [];
   const fetchImpl = async (url, init) => {
     seen.push({ url, init });
-    return { ok: true, status: 200, statusText: '', text: async () => JSON.stringify({ id: 'skill_1' }) };
+    return { ok: true, status: 200, statusText: '', text: async () => JSON.stringify({ id: 'skill_1', data: [], next_page: null }) };
   };
   const client = createPlatformClient({ apiKey: 'k', apiUrl: 'http://x/', fetchImpl, sleep: async () => {} });
   const files = [['alpha/SKILL.md', 'body'], ['alpha/references/r.md', 'ref']];
-  await client.createSkill(files, 'agents-alpha abc');
-  await client.createSkillVersion('skill_1', files, 'agents-alpha def');
+  assert.equal(SKILL_NAME_FIELD, 'display_name');
+  await client.createSkill(files, 'alpha');
+  await client.createSkillVersion('skill_1', files);
+  await client.listSkills();
+  await client.listEvents('sess_1');
   assert.equal(seen[0].url, 'http://x/v1/skills');
   assert.equal(seen[1].url, 'http://x/v1/skills/skill_1/versions');
-  for (const { init } of seen) {
+  assert.equal(new URL(seen[2].url).searchParams.get('source'), 'custom');
+  assert.ok(!/[?&]after=/.test(seen[3].url));
+  for (const { init } of seen.slice(0, 2)) {
     assert.equal(init.method, 'POST');
     assert.ok(init.body instanceof FormData);
     assert.equal(init.headers['content-type'], undefined);
     assert.equal(init.headers['x-api-key'], 'k');
     assert.deepEqual(init.body.getAll('files[]').map((f) => f.name), ['alpha/SKILL.md', 'alpha/references/r.md']);
     assert.equal(await init.body.getAll('files[]')[0].text(), 'body');
+    assert.equal(init.body.has(OLD_TITLE_FIELD), false);
   }
-  assert.equal(seen[0].init.body.get(SKILL_TITLE_FIELD), 'agents-alpha abc');
+  assert.equal(seen[0].init.body.get('display_name'), 'alpha');
+  assert.equal(seen[1].init.body.has('display_name'), false);
 });
