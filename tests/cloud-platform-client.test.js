@@ -204,6 +204,8 @@ test('sessionPhase: terminated is done after end_turn, otherwise failed', () => 
   assert.equal(phaseOf('terminated', [userMessage(), idleEvent('refusal')]), 'failed');
   assert.equal(phaseOf('terminated', [userMessage()]), 'failed');
   assert.equal(phaseOf('terminated', undefined), 'failed');
+  // an end_turn that answered an earlier message doesn't count for the last one
+  assert.equal(phaseOf('terminated', [userMessage(), idleEvent('end_turn'), userMessage()]), 'failed');
 });
 
 test('sessionRunning is a status check: neither idle nor terminated', () => {

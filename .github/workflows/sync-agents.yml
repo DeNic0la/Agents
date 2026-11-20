@@ -1,8 +1,8 @@
 # Agent sync (CW-101): on every merge to main, each cloud/agents/<role>.md becomes the
 # Managed Agents agent agents-<role>, so a session always uses the definitions of the commit
 # on main. Without the ANTHROPIC_API_KEY secret the run skips (dry-run) or fails (live).
-# A manual run can be read-only (the read_only input): it only reads the platform and logs what the
-# sync would create, adopt or update.
+# A manual run can be read-only (the read_only input): it still needs the key to read the platform,
+# and logs what the sync would create, upload a new version to, or update, without writing.
 name: sync-agents
 
 on:

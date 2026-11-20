@@ -2,8 +2,8 @@
 // Sync of cloud/agents/*.md to Managed Agents agents named agents-<role> (CW-101): run on every
 // merge to main, so a session always uses the definitions of the commit on main.
 // The sync reads the platform first, plans as a pure function (platform/sync.js planSync), and
-// then applies the plan. With SYNC_READ_ONLY=true (the manual run's read_only input) it stops
-// after logging the plan and sends only GET requests.
+// then applies the plan, logging each write once it succeeded. With SYNC_READ_ONLY=true (the
+// manual run's read_only input) it stops after logging the plan and sends only GET requests.
 const fs = require('fs');
 const path = require('path');
 const { createPlatformClient } = require('./platform/client.js');
@@ -35,39 +35,49 @@ function readPresetSkill(name, io) {
   return { files, digest: sync.skillDigest(files).slice(0, sync.DIGEST_LENGTH) };
 }
 
-// Logs the plan in the verbs of its mode; `would ...` when nothing is written.
+const environmentLabel = (e) => `environment ${e.want.name} (${e.kind})`;
+const agentLabel = (a) => `agent ${sync.AGENT_PREFIX}${a.def.role}`;
+
+// Logs what needs no write (unchanged items, drift warnings) and, in a read-only run,
+// what a live run would write. A live run logs each write in applyPlan, once it succeeded.
 function logPlan(plan, readOnly, log) {
-  const verb = (done, would) => (readOnly ? would : done);
+  const would = (line) => readOnly && log(line);
   for (const e of plan.environments) {
-    const label = `environment ${e.want.name} (${e.kind})`;
-    if (e.action === 'create') log(`${label}: ${verb('created', 'would create')}`);
-    else if (e.action === 'unchanged') log(`${label}: unchanged`);
-    else log(`::warning::${label} differs from the settings at ${e.path}; left as it is, and no session starts in it until it matches`);
+    if (e.action === 'create') would(`${environmentLabel(e)}: would create`);
+    else if (e.action === 'unchanged') log(`${environmentLabel(e)}: unchanged`);
+    else log(`::warning::${environmentLabel(e)} differs from the settings at ${e.path}; left as it is, and no session starts in it until it matches`);
   }
   for (const s of plan.skills) {
-    if (s.action === 'create') log(`skill ${s.name}: ${verb('created', 'would create')}`);
-    else if (s.action === 'new-version') log(`skill ${s.name}: ${readOnly ? `would upload a new version to ${s.id}` : `new version (${s.id})`}`);
+    if (s.action === 'create') would(`skill ${s.name}: would create`);
+    else if (s.action === 'new-version') would(`skill ${s.name}: would upload a new version to ${s.id}`);
     else log(`skill ${s.name}: unchanged (${s.id})`);
   }
   for (const a of plan.agents) {
-    const label = `agent ${sync.AGENT_PREFIX}${a.def.role}`;
-    if (a.action === 'create') log(`${label}: ${verb('created', 'would create')}`);
-    else if (a.action === 'update') log(`${label}: ${verb('updated', 'would update')}`);
-    else log(`${label}: unchanged`);
+    if (a.action === 'unchanged') log(`${agentLabel(a)}: unchanged`);
+    else would(`${agentLabel(a)}: would ${a.action}`);
   }
 }
 
-// Environments, then skills (collecting their ids), then agents.
-async function applyPlan({ client, plan, presetSkills, settings, personaTexts }) {
-  for (const e of plan.environments) if (e.action === 'create') await client.createEnvironment(e.want);
+// Environments, then skills (collecting their ids), then agents; each write is logged after it succeeded.
+async function applyPlan({ client, plan, presetSkills, settings, personaTexts, log }) {
+  for (const e of plan.environments) {
+    if (e.action !== 'create') continue;
+    await client.createEnvironment(e.want);
+    log(`${environmentLabel(e)}: created`);
+  }
   const skillIds = {};
   const skillDigests = {};
   for (const s of plan.skills) {
     skillDigests[s.name] = s.digest;
-    if (s.action === 'create') skillIds[s.name] = (await client.createSkill(presetSkills[s.name].files, s.name)).id;
-    else {
-      skillIds[s.name] = s.id;
-      if (s.action === 'new-version') await client.createSkillVersion(s.id, presetSkills[s.name].files);
+    if (s.action === 'create') {
+      skillIds[s.name] = (await client.createSkill(presetSkills[s.name].files, s.name)).id;
+      log(`skill ${s.name}: created`);
+      continue;
+    }
+    skillIds[s.name] = s.id;
+    if (s.action === 'new-version') {
+      await client.createSkillVersion(s.id, presetSkills[s.name].files);
+      log(`skill ${s.name}: new version (${s.id})`);
     }
   }
   for (const a of plan.agents) {
@@ -75,6 +85,7 @@ async function applyPlan({ client, plan, presetSkills, settings, personaTexts })
     const want = sync.desiredAgent(a.def, settings, personaTexts, skillIds, skillDigests);
     if (a.action === 'create') await client.createAgent(want);
     else await client.updateAgent(a.id, a.version, want);
+    log(`${agentLabel(a)}: ${a.action === 'create' ? 'created' : 'updated'}`);
   }
 }
 
@@ -113,7 +124,7 @@ async function main({ client, io = realIo, env = process.env, settings, log = co
     log('read-only: nothing written');
     return 0;
   }
-  await applyPlan({ client, plan, presetSkills, settings, personaTexts });
+  await applyPlan({ client, plan, presetSkills, settings, personaTexts, log });
   return 0;
 }
 

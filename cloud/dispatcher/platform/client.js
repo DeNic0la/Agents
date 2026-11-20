@@ -61,8 +61,9 @@ function sessionPhase(session, events) {
   const list = Array.isArray(events) ? events : [];
   const idleAt = lastIndexOfType(list, 'session.status_idle');
   const reason = idleAt >= 0 && list[idleAt].stop_reason ? list[idleAt].stop_reason.type : undefined;
-  if (session.status === 'terminated') return reason === 'end_turn' ? 'done' : 'failed';
-  if (idleAt < 0 || idleAt < lastIndexOfType(list, 'user.message')) return 'running'; // idle before it has answered the last message
+  const answered = idleAt >= 0 && idleAt > lastIndexOfType(list, 'user.message'); // idle after the last message
+  if (session.status === 'terminated') return answered && reason === 'end_turn' ? 'done' : 'failed';
+  if (!answered) return 'running';
   if (reason === 'end_turn') return 'done';
   if (reason === 'requires_action') return 'needs-action';
   if (reason === 'budget_reached') return 'budget';

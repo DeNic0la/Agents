@@ -303,6 +303,20 @@ test('CK-1: against an empty platform the sync creates each skill under its name
   assert.ok(res.lines.includes('agent agents-quick: created'));
 });
 
+test('CW-101: an item is logged as done only after its write succeeded', async () => {
+  const plat = fakePlatform();
+  const failing = async (url, init) => (init.method === 'POST' && new URL(url).pathname === '/v1/agents'
+    ? { ok: false, status: 400, statusText: 'Bad Request', text: async () => '{"error":{"message":"bad"}}' }
+    : plat.fetchImpl(url, init));
+  const lines = [];
+  const client = createPlatformClient({ apiKey: 'k', apiUrl: 'http://x', fetchImpl: failing, sleep: async () => {} });
+  await assert.rejects(main({
+    client, io: fakeIo(REPO), env: { ANTHROPIC_API_KEY: 'k' }, settings: { ...settings, mode: 'live' }, log: (l) => lines.push(l),
+  }));
+  assert.ok(lines.includes('skill alpha: created'), lines.join('\n'));
+  assert.ok(!lines.some((l) => /^agent .*: created$/.test(l)), lines.join('\n'));
+});
+
 test('CK-2: a second run sends only GET requests and logs every item as unchanged', async () => {
   const plat = fakePlatform();
   seedFirstRun(plat);
