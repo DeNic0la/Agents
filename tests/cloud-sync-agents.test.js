@@ -264,8 +264,8 @@ test('CK-3: desiredAgent records the skills as sorted name=digest pairs and the 
 
 // The skill list the first live run left: custom skills named after their SKILL.md name
 // (https://platform.claude.com/docs/en/api/skills/create).
-// the field name the API doesn't have; written in two parts so the repo never names it as a field
-const OLD_TITLE_FIELD = 'display_' + 'title';
+// The field the old code sent and the API doesn't have; the tests assert it's never sent.
+const OLD_TITLE_FIELD = 'display_title';
 const seededSkill = (name, id) => ({
   type: 'skill', id, display_name: name, latest_version_id: `ver_${id}`, source: { type: 'custom' }, created_at: 't', updated_at: 't',
 });

@@ -58,7 +58,7 @@ function logPlan(plan, readOnly, log) {
 }
 
 // Environments, then skills (collecting their ids), then agents.
-async function applyPlan({ client, plan, presetSkills, settings, personaTexts, log }) {
+async function applyPlan({ client, plan, presetSkills, settings, personaTexts }) {
   for (const e of plan.environments) if (e.action === 'create') await client.createEnvironment(e.want);
   const skillIds = {};
   const skillDigests = {};
@@ -113,7 +113,7 @@ async function main({ client, io = realIo, env = process.env, settings, log = co
     log('read-only: nothing written');
     return 0;
   }
-  await applyPlan({ client, plan, presetSkills, settings, personaTexts, log });
+  await applyPlan({ client, plan, presetSkills, settings, personaTexts });
   return 0;
 }
 

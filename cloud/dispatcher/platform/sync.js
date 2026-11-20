@@ -178,6 +178,7 @@ function planSync({ settings, definitions, personaTexts, presetSkills, environme
   const agentPlan = definitions.map((def) => {
     const have = ours.find((a) => a.name === AGENT_PREFIX + def.role);
     if (!have) return { def, action: 'create' };
+    // A skill created in this run has no id yet, so the agent can't already reference it: always update.
     if (def.skills.some((s) => bySkill[s].action === 'create')) return { def, id: have.id, version: have.version, action: 'update' };
     const ids = Object.fromEntries(def.skills.map((s) => [s, bySkill[s].id]));
     const want = desiredAgent(def, settings, personaTexts, ids, skillDigests);
